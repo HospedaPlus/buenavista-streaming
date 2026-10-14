@@ -1,7 +1,9 @@
+# Build backend used to install this repository as a Python package.
 [build-system]
 requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
+# Package metadata and runtime dependencies.
 [project]
 name = "buenavista-streaming"
 version = "0.1.0"
@@ -13,15 +15,18 @@ dependencies = [
   "python-dotenv>=1.0,<2",
 ]
 
+# Development-only tools for tests and code quality.
 [project.optional-dependencies]
 dev = [
   "pytest>=8.3,<9",
   "ruff>=0.8,<1",
 ]
 
+# Include application modules under src/ when installing the package.
 [tool.setuptools.packages.find]
 include = ["src*"]
 
+# Keep lint and formatting behavior consistent with CI.
 [tool.ruff]
 line-length = 100
 target-version = "py312"
@@ -29,6 +34,7 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]
 
+# Discover tests under tests/ and show concise failure summaries.
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
