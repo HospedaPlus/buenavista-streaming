@@ -1,10 +1,14 @@
+# Continuous integration keeps code style and unit tests consistent.
 name: CI
 
 on:
+  # Validate proposed changes before they are merged.
   pull_request:
+  # Validate commits pushed to the shared development branches.
   push:
     branches: [main, develop]
 
+# CI needs read-only repository access to check out and test the source.
 permissions:
   contents: read
 
@@ -21,9 +25,12 @@ jobs:
           cache: pip
       - name: Install project
         run: python -m pip install -e ".[dev]"
+      # Fail fast if the source has lint issues.
       - name: Lint
         run: ruff check .
+      # Keep formatting consistent before running the tests.
       - name: Check formatting
         run: ruff format --check .
+      # Run unit tests only after lint and formatting succeed.
       - name: Run tests
         run: pytest
