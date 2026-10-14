@@ -51,7 +51,7 @@ def ensure_stream(client, stream_name: str, shard_count: int) -> None:
         except ClientError:
             pass
         time.sleep(1)
-    raise TimeoutError(f"Kinesis stream {stream_name!r} did not become ACTIVE within 60 seconds)
+    raise TimeoutError(f"Kinesis stream {stream_name!r} did not become ACTIVE within 60 seconds")
 
 
 def publish_events(count: int, seed: int = 42) -> int:
