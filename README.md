@@ -40,13 +40,15 @@ It generates structured reservation lifecycle events, validates them, and publis
 
 ## 🧩 How it works
 
-    flowchart TD
-        A["🏨 Synthetic F2 event generator"] --> B["✅ Pydantic validation"]
-        B --> C["📦 JSON event"]
-        C --> D["📡 Kinesis Data Stream"]
-        D -. "Next implementation stage" .-> E["⚙️ Downstream consumer"]
-        E -.-> F["🗄️ Approved storage / analytics"]
-        L["🧪 LocalStack"] --- D
+\`\`\`mermaid
+flowchart TD
+    A["🏨 Synthetic F2 event generator"] --> B["✅ Pydantic validation"]
+    B --> C["📦 JSON event"]
+    C --> D["📡 Kinesis Data Stream"]
+    D -. "Next implementation stage" .-> E["⚙️ Downstream consumer"]
+    E -.-> F["🗄️ Approved storage / analytics"]
+    L["🧪 LocalStack"] --- D
+\`\`\`
 
 **Current implementation:** event generation, validation, and publishing to Kinesis. A downstream consumer, sink persistence, replay, and end-to-end delivery verification are not included yet.
 
