@@ -85,6 +85,15 @@ def build_event(index: int, seed: int = 42) -> ReservationEvent:
     checkout = check_in + timedelta(days=rng.randint(1, 5))
     occurred_at = datetime(2026, 10, 1, tzinfo=UTC) + timedelta(minutes=index)
 
+    if country == "CO":
+        currency = "COP"
+    elif country in {"PT", "ES"}:
+        currency = "EUR"
+    elif country == "BR":
+        currency = "BRL"
+    else:
+        currency = "MXN"
+
     return ReservationEvent(
         event_id=uuid5(NAMESPACE_URL, f"buenavista-streaming:{seed}:{index}"),
         schema_version="1.0",
@@ -99,7 +108,7 @@ def build_event(index: int, seed: int = 42) -> ReservationEvent:
             room_type=("standard", "deluxe", "suite")[index % 3],
             guests=rng.randint(1, 4),
             total_amount=round(rng.uniform(80, 900), 2),
-            currency="COP" if country == "CO" else "EUR" if country in {"PT", "ES"} else "BRL" if country == "BR" else "MXN",
+            currency=currency,
             status=status,
         ),
     )
