@@ -1,7 +1,6 @@
 """Publish synthetic F2 reservation events to Amazon Kinesis Data Streams."""
 
 import argparse
-import json
 import logging
 import time
 
@@ -44,13 +43,17 @@ def ensure_stream(client, stream_name: str, shard_count: int) -> None:
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         try:
-            summary = client.describe_stream_summary(StreamName=stream_name)["StreamDescriptionSummary"]
+            summary = client.describe_stream_summary(StreamName=stream_name)[
+                "StreamDescriptionSummary"
+            ]
             if summary["StreamStatus"] == "ACTIVE":
                 return
         except ClientError:
             pass
         time.sleep(1)
-    raise TimeoutError(f"Kinesis stream {stream_name!r} did not become ACTIVE within 60 seconds")
+    raise TimeoutError(
+        f"Kinesis stream {stream_name!r} did not become ACTIVE within 60 seconds"
+    )
 
 
 def publish_events(count: int, seed: int = 42) -> int:
@@ -78,13 +81,20 @@ def publish_events(count: int, seed: int = 42) -> int:
             response["SequenceNumber"],
         )
 
-    logger.info("publish complete: %d/%d events sent to %s", published, count, settings.stream_name)
+    logger.info(
+        "publish complete: %d/%d events sent to %s",
+        published,
+        count,
+        settings.stream_name,
+    )
     return published
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--count", type=int, default=20, help="Number of synthetic events to publish")
+    parser.add_argument(
+        "--count", type=int, default=20, help="Number of synthetic events to publish"
+    )
     parser.add_argument("--seed", type=int, default=42, help="Seed for reproducible test events")
     args = parser.parse_args()
     publish_events(args.count, args.seed)
