@@ -13,7 +13,9 @@ def test_event_is_valid_and_uses_utc():
 
 
 def test_same_seed_and_index_produce_same_event():
-    assert build_event(7, seed=99).model_dump_json() == build_event(7, seed=99).model_dump_json()
+    first = build_event(7, seed=99).model_dump_json()
+    second = build_event(7, seed=99).model_dump_json()
+    assert first == second
 
 
 def test_event_uses_shared_hotel_id_set():
