@@ -1,5 +1,5 @@
-from pydantic import ValidationError
 import pytest
+from pydantic import ValidationError
 
 from src.events import HOTEL_IDS, ReservationEvent, ReservationPayload, build_event
 
