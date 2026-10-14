@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "buenavista-streaming"
+version = "0.1.0"
+description = "Synthetic F2 channel-manager event producer for HospedaPlus/Buenavista"
+requires-python = ">=3.12"
+dependencies = [
+  "boto3>=1.35,<2",
+  "pydantic>=2.8,<3",
+  "python-dotenv>=1.0,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<9",
+  "ruff>=0.8,<1",
+]
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
