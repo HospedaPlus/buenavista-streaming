@@ -1,20 +1,27 @@
+# Local AWS-compatible services for development; this does not create AWS resources.
 services:
   localstack:
+    # Pin a version so local runs are repeatable across team members.
     image: localstack/localstack:3.8.1
     container_name: buenavista-streaming-localstack
     ports:
+      # LocalStack exposes its AWS-compatible API on the standard local endpoint.
       - "4566:4566"
     environment:
+      # Enable only the Kinesis API required by this repository.
       SERVICES: kinesis
       AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-1}
+      # Preserve local service state across container restarts.
       PERSISTENCE: "1"
     volumes:
       - localstack_data:/var/lib/localstack
     healthcheck:
+      # Mark the container healthy once LocalStack reports its Kinesis service.
       test: ["CMD", "bash", "-c", "curl -fsS http://localhost:4566/_localstack/health | grep -q kinesis"]
       interval: 10s
       timeout: 5s
       retries: 10
 
 volumes:
+  # Named volume keeps local emulation state until explicitly removed.
   localstack_data:
