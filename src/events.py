@@ -1,8 +1,11 @@
 """Versioned, PII-minimized event contract for the synthetic F2 source."""
 
-from datetime import UTC, datetime
+import json
+import random
+from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from typing import Literal
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -11,6 +14,9 @@ EventType = Literal[
     "reservation.updated",
     "reservation.cancelled",
 ]
+
+CATALOG_PATH = Path(__file__).parent / "catalog" / "hotel_ids.json"
+HOTEL_IDS = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
 
 
 class ReservationPayload(BaseModel):
@@ -59,13 +65,12 @@ class ReservationEvent(BaseModel):
 
 def build_event(index: int, seed: int = 42) -> ReservationEvent:
     """Build a reproducible synthetic event for local testing."""
-    import random
-    from uuid import NAMESPACE_URL, uuid5
+    if index < 0:
+        raise ValueError("index must be non-negative")
 
     rng = random.Random(f"{seed}:{index}")
-    hotel_number = (index % 28) + 1
-    hotel_country = "CO" if hotel_number <= 20 else "PT"
-    hotel_id = f"HP-{hotel_country}-{((hotel_number - 1) % (20 if hotel_country == 'CO' else 8)) + 1:03d}"
+    hotel_id = HOTEL_IDS[index % len(HOTEL_IDS)]
+    country = hotel_id.split("-")[1]
     event_type: EventType = (
         "reservation.created",
         "reservation.updated",
@@ -76,14 +81,10 @@ def build_event(index: int, seed: int = 42) -> ReservationEvent:
         "reservation.updated": "modified",
         "reservation.cancelled": "cancelled",
     }[event_type]
-    check_in_day = 1 + (index % 25)
-    check_in = f"2026-11-{check_in_day:02d}"
-    check_out_day = check_in_day + rng.randint(1, 5)
-    from datetime import date, timedelta
+    check_in = date(2026, 11, 1) + timedelta(days=index % 25)
+    checkout = check_in + timedelta(days=rng.randint(1, 5))
+    occurred_at = datetime(2026, 10, 1, tzinfo=UTC) + timedelta(minutes=index)
 
-    checkout = date.fromisoformat(check_in) + timedelta(days=rng.randint(1, 5))
-    # Generate event times from a stable baseline so the same seed/index yields the same event.
-    occurred_at = datetime(2026, 10, 1, tzinfo=UTC).replace(minute=index % 60, second=0)
     return ReservationEvent(
         event_id=uuid5(NAMESPACE_URL, f"buenavista-streaming:{seed}:{index}"),
         schema_version="1.0",
@@ -93,12 +94,12 @@ def build_event(index: int, seed: int = 42) -> ReservationEvent:
         hotel_id=hotel_id,
         reservation_id=f"F2-RES-{seed:04d}-{index:08d}",
         data=ReservationPayload(
-            check_in=check_in,
+            check_in=check_in.isoformat(),
             check_out=checkout.isoformat(),
             room_type=("standard", "deluxe", "suite")[index % 3],
             guests=rng.randint(1, 4),
             total_amount=round(rng.uniform(80, 900), 2),
-            currency="COP" if hotel_country == "CO" else "EUR",
+            currency="COP" if country == "CO" else "EUR" if country in {"PT", "ES"} else "BRL" if country == "BR" else "MXN",
             status=status,
         ),
     )
