@@ -1,0 +1,20 @@
+services:
+  localstack:
+    image: localstack/localstack:3.8.1
+    container_name: buenavista-streaming-localstack
+    ports:
+      - "4566:4566"
+    environment:
+      SERVICES: kinesis
+      AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-1}
+      PERSISTENCE: "1"
+    volumes:
+      - localstack_data:/var/lib/localstack
+    healthcheck:
+      test: ["CMD", "bash", "-c", "curl -fsS http://localhost:4566/_localstack/health | grep -q kinesis"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  localstack_data:
