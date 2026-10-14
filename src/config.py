@@ -1,7 +1,7 @@
 """Environment-based configuration for the streaming producer."""
 
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
