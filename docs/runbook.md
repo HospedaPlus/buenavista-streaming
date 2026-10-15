@@ -1,59 +1,53 @@
 # Local runbook
 
-## Start the local stream emulator
+## Start RabbitMQ
 
-```bash
-cp .env.example .env
-docker compose up -d localstack
+```powershell
+Copy-Item .env.example .env
+docker compose up -d rabbitmq
 docker compose ps
+docker compose logs rabbitmq
 ```
 
-On Windows PowerShell, create and activate a virtual environment:
+RabbitMQ AMQP port: `5672`. Management UI: `http://localhost:15672`. Local defaults are `guest/guest`; use them only for local development.
+
+## Install and validate
 
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -e ".[dev]"
-```
-
-On macOS/Linux use `python3.12 -m venv .venv` and `source .venv/bin/activate`.
-
-## Validate and publish
-
-```bash
+python -m pip install -e ".[dev]"
 ruff check .
 ruff format --check .
 pytest
+```
+
+## Publish a controlled batch
+
+```powershell
 python -m src.producer --count 20 --seed 42
 ```
 
-Expected: tests pass and logs show 20 records published, including each record's shard ID and sequence number. This validates producer-to-stream publication only; it does not validate delivery to a downstream database or analytics table.
-
-## Inspect the stream
-
-If AWS CLI is installed, use LocalStack's endpoint:
-
-```bash
-aws --endpoint-url=http://localhost:4566 --region us-east-1 kinesis list-streams
-aws --endpoint-url=http://localhost:4566 --region us-east-1 kinesis describe-stream-summary --stream-name buenavista-reservation-events
-```
+Expected: logs confirm 20 messages were acknowledged by RabbitMQ. Open the management UI, select Queues and Streams, and inspect `buenavista.reservation.events`; the ready-message count should reflect messages waiting for a consumer.
 
 ## Troubleshooting
 
-- **Connection refused:** check `docker compose ps` and `docker compose logs localstack`; port 4566 must be available.
-- **Stream does not become active:** inspect LocalStack logs and confirm Kinesis is included in `SERVICES`.
-- **AWS auth errors:** local mode uses dummy credentials from `.env.example`; never copy those into an AWS deployment.
-- **Wrong endpoint in AWS:** unset `AWS_ENDPOINT_URL` for real AWS so boto3 uses the standard AWS endpoint.
-- **Duplicates downstream:** use `event_id` as an idempotency key; Kinesis producer acknowledgements do not imply exactly-once sink processing.
+- **Connection refused:** run `docker compose ps` and `docker compose logs rabbitmq`; check port 5672.
+- **Authentication failure:** confirm local `RABBITMQ_USER` and `RABBITMQ_PASSWORD` match the container settings. If changing defaults after the RabbitMQ volume has already been initialized, recreating the container alone may not reset credentials.
+- **Queue has zero ready messages:** confirm the publish logs; a consumer may already have received messages.
+- **Duplicate processing:** use `event_id` as the downstream idempotency key.
+- **Messages repeatedly fail:** define bounded retries and a dead-letter queue before production.
 
-## Cleanup
+## Stop local services
 
-```bash
+```powershell
 docker compose down
 ```
 
-To also delete persisted LocalStack state:
+Delete the local RabbitMQ volume as well (this removes local broker state):
 
-```bash
+```powershell
 docker compose down -v
 ```
+
+Do not expose port 5672 or the management UI publicly. Use a secured, approved deployment configuration outside local development.
