@@ -10,19 +10,20 @@
 | `schema_version` | string | `1.0` |
 | `source` | string | `f2-channel-manager` |
 | `event_type` | enum | `reservation.created`, `reservation.updated`, `reservation.cancelled` |
-| `occurred_at` | timestamp | Timezone-aware ISO 8601; normalized to UTC |
-| `hotel_id` | string | Shared catalog style, e.g. `HP-CO-001` |
-| `reservation_id` | string | Synthetic source identifier |
-| `data` | object | Minimal reservation fields |
+| `occurred_at` | timestamp | Timezone-aware ISO 8601, normalized to UTC |
+| `hotel_id` | string | ID from the shared catalog |
+| `reservation_id` | string | Synthetic reservation identifier |
+| `data` | object | Minimal reservation facts |
 
-## Payload
+## RabbitMQ delivery
 
-- `check_in`, `check_out`: ISO dates; checkout must be after check-in.
-- `room_type`: non-empty label.
-- `guests`: integer from 1 to 20.
-- `total_amount`: non-negative numeric amount.
-- `currency`: three-letter uppercase currency code.
-- `status`: `confirmed`, `modified`, or `cancelled`.
+Messages are published to a durable queue configured by `RABBITMQ_QUEUE`. Messages use persistent delivery mode, JSON content type, and publisher confirms. The event ID is copied into the AMQP message ID property.
+
+Publisher confirms do not mean a consumer has processed the event. A consumer must acknowledge only after its processing step succeeds, use idempotent writes keyed by `event_id`, and define retry/dead-letter behavior.
+
+## Data quality and privacy
+
+The source is synthetic. Do not include guest names, emails, phone numbers, payment card data, or other direct identifiers. Consumers should validate the schema version and retain both event and processing timestamps.
 
 ## Example
 
@@ -46,11 +47,3 @@
   }
 }
 ```
-
-## Data quality and privacy
-
-The source is synthetic. Do not include guest names, emails, phone numbers, payment card data, or other direct identifiers in the event stream. Downstream consumers should validate schema version, deduplicate on `event_id`, retain source/event timestamps, and define retry and dead-letter behavior before production rollout.
-
-## Delivery semantics
-
-Kinesis `PutRecord` acknowledges an individual publish and returns a shard ID and sequence number. This scaffold does not yet implement a consumer, checkpointing, replay orchestration, or end-to-end sink verification. Do not claim exactly-once delivery; downstream processing must be idempotent.
