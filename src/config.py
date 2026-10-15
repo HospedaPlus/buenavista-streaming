@@ -1,37 +1,25 @@
-"""Load local or AWS settings for the streaming producer.
-
-Environment variables are read from the process environment and, when present,
-the local .env file. LocalStack is the safe default for development.
-"""
+"""Load local RabbitMQ settings from environment or .env."""
 
 import os
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
-# Load developer-local values without overriding variables already set by the shell.
 load_dotenv()
 
 
 @dataclass(frozen=True)
 class Settings:
-    """Immutable configuration used to construct the Kinesis client."""
+    """Connection and queue settings for the RabbitMQ producer."""
 
-    # AWS region for the stream; LocalStack defaults to us-east-1.
-    region: str = os.getenv("AWS_REGION", "us-east-1")
-
-    # LocalStack accepts dummy credentials; AWS should use an approved identity.
-    access_key_id: str = os.getenv("AWS_ACCESS_KEY_ID", "test")
-    secret_access_key: str = os.getenv("AWS_SECRET_ACCESS_KEY", "test")
-
-    # Keep the local endpoint for development; unset AWS_ENDPOINT_URL for real AWS.
-    endpoint_url: str | None = os.getenv("AWS_ENDPOINT_URL", "http://localhost:4566")
-
-    # Name and initial shard count of the Kinesis stream created by the producer.
-    stream_name: str = os.getenv("KINESIS_STREAM_NAME", "buenavista-reservation-events")
-    shard_count: int = int(os.getenv("KINESIS_SHARD_COUNT", "1"))
+    host: str = os.getenv("RABBITMQ_HOST", "localhost")
+    port: int = int(os.getenv("RABBITMQ_PORT", "5672"))
+    username: str = os.getenv("RABBITMQ_USER", "guest")
+    password: str = os.getenv("RABBITMQ_PASSWORD", "guest")
+    virtual_host: str = os.getenv("RABBITMQ_VHOST", "/")
+    queue_name: str = os.getenv("RABBITMQ_QUEUE", "buenavista.reservation.events")
 
 
 def get_settings() -> Settings:
-    """Return the current configuration as a typed settings object."""
+    """Return current settings as an immutable object."""
     return Settings()
