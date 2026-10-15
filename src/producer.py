@@ -76,7 +76,12 @@ def publish_events(count: int, seed: int = 42) -> int:
                 settings.queue_name,
             )
 
-        logger.info("publish complete: %d/%d events confirmed by queue %s", published, count, settings.queue_name)
+        logger.info(
+            "publish complete: %d/%d events confirmed by queue %s",
+            published,
+            count,
+            settings.queue_name,
+        )
         return published
     except (AMQPConnectionError, NackError, UnroutableError):
         logger.exception("RabbitMQ publish failed")
@@ -89,8 +94,18 @@ def publish_events(count: int, seed: int = 42) -> int:
 def main() -> None:
     """Parse command-line options and publish a controlled event batch."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--count", type=int, default=20, help="Number of synthetic events to publish")
-    parser.add_argument("--seed", type=int, default=42, help="Seed for reproducible test events")
+    parser.add_argument(
+        "--count",
+        type=int,
+        default=20,
+        help="Number of synthetic events to publish",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Seed for reproducible test events",
+    )
     args = parser.parse_args()
     publish_events(args.count, args.seed)
 
