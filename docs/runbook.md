@@ -28,7 +28,15 @@ pytest
 python -m src.producer --count 20 --seed 42
 ```
 
-Expected: logs confirm 20 messages were acknowledged by RabbitMQ. Open the management UI, select Queues and Streams, and inspect `buenavista.reservation.events`; the ready-message count should reflect messages waiting for a consumer.
+Expected: the summary line reports `total=20` messages confirmed by RabbitMQ. Open the management UI, select Queues and Streams, and inspect `buenavista.reservation.events`; the ready-message count should reflect messages waiting for a consumer.
+
+## Run the continuous stream
+
+```powershell
+python -m src.producer --continuous --duration 75
+```
+
+Expected: one `throughput` line per second, 15 events per second during the first 10 seconds of each minute and 5 otherwise, then a summary with `peak=15 ev/s`. Run `python -m src.consumer` in another terminal to drain the queue; in the management UI the exchange `buenavista.reservations` shows the publish rate.
 
 ## Troubleshooting
 
