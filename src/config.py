@@ -27,6 +27,13 @@ class Settings:
         "buenavista.reservation.events",
     )
 
+    # Topic exchange that receives every reservation event. The routing key is
+    # the event type (for example reservation.cancelled).
+    exchange_name: str = os.getenv(
+        "RABBITMQ_EXCHANGE",
+        "buenavista.reservations",
+    )
+
     # Maximum number of additional processing attempts for transient failures.
     # Zero disables retries; negative values are invalid.
     max_retries: int = int(os.getenv("RABBITMQ_MAX_RETRIES", "3"))
@@ -51,6 +58,9 @@ class Settings:
 
         if not self.queue_name.strip():
             raise ValueError("RABBITMQ_QUEUE cannot be empty")
+
+        if not self.exchange_name.strip():
+            raise ValueError("RABBITMQ_EXCHANGE cannot be empty")
 
         if not self.dead_letter_queue.strip():
             raise ValueError("RABBITMQ_DLQ cannot be empty")

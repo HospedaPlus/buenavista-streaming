@@ -35,7 +35,7 @@ from pydantic import ValidationError
 
 from src.config import get_settings
 from src.events import ReservationEvent
-from src.producer import create_connection
+from src.producer import create_connection, declare_stream_topology
 
 # Keep application logs consistent for troubleshooting and automated tests.
 logging.basicConfig(
@@ -75,11 +75,12 @@ def process_event(event: ReservationEvent) -> None:
     # Avoid logging the entire payload because future schemas may contain
     # information that should not appear in application logs.
     logger.info(
-        "Validated event: event_id=%s event_type=%s hotel_id=%s reservation_id=%s",
+        "Validated event: event_id=%s event_type=%s hotel_id=%s reservation_id=%s version=%s",
         event.event_id,
         event.event_type,
         event.hotel_id,
         event.reservation_id,
+        event.reservation_version,
     )
 
 
@@ -94,7 +95,7 @@ def declare_topology(channel: Any) -> None:
 
     The main queue is intentionally not redeclared with new queue arguments.
     Changing its arguments can cause a PRECONDITION_FAILED error, and deleting
-    it to recreate it would risk losing the 20 existing test messages.
+    it to recreate it would risk losing messages already waiting in it.
     """
     settings = get_settings()
 
@@ -140,9 +141,9 @@ def publish_confirmed(
     that the replacement message has been accepted. Otherwise, a failed
     transfer could lose the event.
     """
-    # Enable publisher confirms so a successful return from basic_publish()
-    # represents broker confirmation rather than merely a local send attempt.
-    channel.confirm_delivery()
+    # The channel has publisher confirms enabled (see consume_events), so a
+    # successful return from basic_publish() represents broker confirmation and
+    # a rejected message raises NackError or UnroutableError.
 
     # Use the default exchange and the destination queue name as the routing key.
     # Persistent delivery helps messages survive broker restarts when the
@@ -360,12 +361,13 @@ def consume_events() -> None:
     try:
         channel = connection.channel()
 
-        # Declare the existing main queue using its original settings.
-        # Do not delete or recreate it because it may contain waiting messages.
-        channel.queue_declare(
-            queue=settings.queue_name,
-            durable=True,
-        )
+        # Declare the exchange, the main queue with its original settings, and
+        # their binding. Nothing is deleted, so waiting messages are kept.
+        declare_stream_topology(channel)
+
+        # Enable publisher confirms once per channel; retry and dead-letter
+        # transfers rely on them before acknowledging the original delivery.
+        channel.confirm_delivery()
 
         # Declare supporting queues before registering the consumer.
         declare_topology(channel)
