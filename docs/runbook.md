@@ -1,50 +1,62 @@
-# Local runbook
+# Kafka local runbook
 
-## Start RabbitMQ
+## Start the local broker
 
 ```powershell
 Copy-Item .env.example .env
-docker compose up -d rabbitmq
+docker compose up -d kafka
 docker compose ps
-docker compose logs rabbitmq
+docker compose logs kafka
 ```
 
-RabbitMQ AMQP port: `5672`. Management UI: `http://localhost:15672`. Local defaults are `guest/guest`; use them only for local development.
+This is a single-node KRaft development broker, without authentication. It is not a production topology.
 
-## Install and validate
+Create the three topics before running the producer or consumers:
+
+```powershell
+docker compose exec kafka kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic buenavista.reservations.v1 --partitions 6 --replication-factor 1
+docker compose exec kafka kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic buenavista.reservations.retry.v1 --partitions 6 --replication-factor 1
+docker compose exec kafka kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic buenavista.reservations.dlq.v1 --partitions 6 --replication-factor 1
+```
+
+## Install and start the source
 
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
-ruff check .
-ruff format --check .
-pytest
-```
-
-## Publish a controlled batch
-
-```powershell
 python -m src.producer --count 20 --seed 42
 ```
 
-Expected: the summary line reports `total=20` messages confirmed by RabbitMQ. Open the management UI, select Queues and Streams, and inspect `buenavista.reservation.events`; the ready-message count should reflect messages waiting for a consumer.
+The simulator produces schema v1.1 events to `buenavista.reservations.v1`, keyed by reservation ID.
 
-## Run the continuous stream
+## Run the independent consumer groups
+
+Apply `sql/streaming_schema.sql` to a disposable PostgreSQL database before starting the OLTP projector. Set `DATABASE_URL` via environment configuration; use the approved Neon connection only after the team authorizes the additive migration. The Bronze consumer writes under `.data/bronze` when `BRONZE_S3_BUCKET` is empty; for S3, provide the approved bucket and AWS credential chain.
+
+```powershell
+python -m src.consumer
+```
+
+In another terminal:
+
+```powershell
+python -m src.bronze_consumer
+```
+
+Each group consumes the main topic independently. Neon offset commits follow a successful database transaction. Bronze batches up to 500 records or waits up to 30 seconds, groups raw records by ingest date and hotel, writes newline-delimited objects, then commits the highest processed offset per partition. Replays are expected and handled using event IDs or Kafka coordinates; Silver deduplicates by event ID and Kafka coordinates.
+
+## Continuous demonstration
 
 ```powershell
 python -m src.producer --continuous --duration 75
 ```
 
-Expected: one `throughput` line per second, 15 events per second during the first 10 seconds of each minute and 5 otherwise, then a summary with `peak=15 ev/s`. Run `python -m src.consumer` in another terminal to drain the queue; in the management UI the exchange `buenavista.reservations` shows the publish rate.
+Defaults: 5 events per second with a 15 events per second peak for 10 seconds every 60 seconds. These are simulator settings.
 
-## Troubleshooting
+## Downstream path
 
-- **Connection refused:** run `docker compose ps` and `docker compose logs rabbitmq`; check port 5672.
-- **Authentication failure:** confirm local `RABBITMQ_USER` and `RABBITMQ_PASSWORD` match the container settings. If changing defaults after the RabbitMQ volume has already been initialized, recreating the container alone may not reset credentials.
-- **Queue has zero ready messages:** confirm the publish logs; a consumer may already have received messages.
-- **Duplicate processing:** use `event_id` as the downstream idempotency key.
-- **Messages repeatedly fail:** define bounded retries and a dead-letter queue before production.
+Airflow scheduled batch jobs read S3 Bronze and build Silver (validation, deduplication, pseudonymization) and Gold (revenue facts/dimensions) for Power BI. This repository defines the Bronze handoff; deploy the Airflow transforms in the data-platform repository.
 
 ## Stop local services
 
@@ -52,10 +64,4 @@ Expected: one `throughput` line per second, 15 events per second during the firs
 docker compose down
 ```
 
-Delete the local RabbitMQ volume as well (this removes local broker state):
-
-```powershell
-docker compose down -v
-```
-
-Do not expose port 5672 or the management UI publicly. Use a secured, approved deployment configuration outside local development.
+`docker compose down -v` removes local Kafka state. Production Kafka security, MSK settings, partition/retention sizing, AWS IAM, S3 lifecycle, batching, monitoring, and recovery validation need deployment review.

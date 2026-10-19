@@ -1,128 +1,131 @@
-# Buenavista Streaming Ingestion
+<div align="center">
 
-Synthetic streaming source for HospedaPlus/Buenavista. This repository simulates the F2 source (channel-manager events): it generates schema-validated JSON reservation events, continuously and with periodic peaks of at least 10 events per second, and publishes them to RabbitMQ through a durable topic exchange and queue.
+# 🏨 HospedaPlus Streaming
 
-> **Development status:** synthetic events only. Local publication must be tested before claiming the source is ready. RabbitMQ is selected to align with the project's cost-conscious architecture; no managed Kinesis stream is required for this local implementation.
+### From the front desk to the data lake — one event at a time.
 
-## Architecture
+**The F2 Kafka pipeline for synthetic reservation events, operational projections, and analytics-ready Bronze data.**
 
-```text
-Synthetic F2 event generator
-        |
-        v
-Pydantic event validation
-        |
-        v
-RabbitMQ topic exchange buenavista.reservations (routing key = event type)
-        |  binding reservation.#
-        v
-RabbitMQ durable queue buenavista.reservation.events
-        |
-        v
-Consumer (next stage)
-        |
-        v
-Approved data destination
-```
+[![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Apache Kafka](https://img.shields.io/badge/Apache_Kafka-event_stream-231F20?logo=apachekafka&logoColor=white)](https://kafka.apache.org/)
+[![Amazon S3](https://img.shields.io/badge/Amazon_S3-Bronze_lake-569A31?logo=amazons3&logoColor=white)](https://aws.amazon.com/s3/)
+[![Neon](https://img.shields.io/badge/Neon-PostgreSQL-00E599?logo=postgresql&logoColor=101828)](https://neon.tech/)
+[![Docker](https://img.shields.io/badge/Docker-local_dev-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 
-RabbitMQ is already part of the wider project architecture for asynchronous workloads. The team should confirm the queue and consumer integration points against the final architecture diagram. Airflow/Celery task messages and business reservation events should use clearly separated queues and routing conventions.
+🛎️ **Synthetic data** &nbsp; · &nbsp; 🔀 **Independent OLTP + OLAP paths** &nbsp; · &nbsp; 🗝️ **No direct guest PII**
 
-## Event types
+</div>
 
-| Event type | Meaning |
+---
+
+## ✨ What this project does
+
+HospedaPlus needs reservation events to serve day-to-day hotel operations and support trustworthy revenue analytics. This repository builds the **F2 streaming slice**: it simulates Channel Manager events, validates the shared event contract, and publishes them to Kafka. Two independent consumer groups then serve two different needs:
+
+- **🏨 Operations (OLTP):** project events into an additive Neon schema for booking and operations APIs.
+- **📊 Analytics (OLAP):** preserve raw events in Amazon S3 Bronze for scheduled Airflow processing into Silver and Gold.
+
+The same event can serve both paths without making the operational database double as the analytics lake.
+
+> **Architecture status:** this is the approved target flow and a development demonstrator. The AWS deployment guide is a proposal; production infrastructure has not been deployed.
+
+## 🗺️ The flow at a glance
+
+<div align="center">
+<img src="docs/architecture/hospedaplus-f2-kafka-flow.svg" alt="HospedaPlus F2 Kafka architecture: synthetic Channel Manager events flow through a Python producer into Kafka, then branch into a Neon OLTP path and an S3 Bronze to Airflow, Silver, Gold, and Power BI analytics path." width="100%">
+<br>
+<sub>🖱️ <a href="docs/architecture/hospedaplus-f2-kafka-flow.drawio">Open the editable Draw.io source</a> · <a href="https://app.diagrams.net/">Edit with diagrams.net</a></sub>
+</div>
+
+### How to read the diagram
+
+1. **🛎️ Create a synthetic stay event.** The Channel Manager simulator emits reservation lifecycle events—created, updated, cancelled, no-show, check-in, and check-out. The Python producer validates schema **v1.1** and sends messages keyed by `reservation_id` to `buenavista.reservations.v1`.
+2. **🔀 Fan out once, consume independently.** Kafka keeps separate offsets for each consumer group, so the operational projection and analytics capture can progress independently.
+3. **🧾 Keep the operational view current.** The OLTP consumer inserts each `event_id` into `streaming.f2_event_inbox` and updates `streaming.f2_reservations_current` only when the incoming `reservation_version` is newer. Both writes share one Neon transaction; the Kafka offset is committed after that transaction succeeds. Booking and operations APIs read this projection.
+4. **🌿 Preserve the analytics record.** The OLAP consumer batches raw events into S3 Bronze, partitioned by `ingest_date` and `hotel_id`. Each record retains event time, ingest time, and Kafka topic/partition/offset coordinates. The consumer commits offsets after the batch is written.
+5. **✨ Shape data for decisions.** Scheduled Airflow jobs validate and deduplicate Bronze into Silver, pseudonymize before analytics, then build Gold revenue facts and dimensions for Power BI.
+6. **🚨 Route failures for inspection.** Invalid events go to the dead-letter topic. Transient OLTP failures use bounded retries and go to the DLQ after the retry limit.
+
+> **Delivery behavior:** Kafka-to-database and Kafka-to-S3 delivery is at-least-once. Replays are expected; the inbox deduplicates by event ID, and the Bronze records retain Kafka coordinates for reconciliation.
+
+## 🧩 Event contract & data ownership
+
+| Area | Contract |
 |---|---|
-| `reservation.created` | Reservation created |
-| `reservation.updated` | Reservation modified (dates, room type or guests); a reservation can have several |
-| `reservation.cancelled` | Reservation cancelled; about 30% of cancellations are late (< 24 h before arrival) |
-| `reservation.no_show` | Guest did not arrive |
-| `reservation.checked_in` | Guest checked in |
-| `reservation.checked_out` | Guest checked out |
+| Event version | Schema **v1.1**, as approved for the F2 streaming flow |
+| Main topic | `buenavista.reservations.v1` |
+| Message key | `reservation_id` |
+| Failure topics | `buenavista.reservations.retry.v1` and `buenavista.reservations.dlq.v1` |
+| Guest data | Synthetic values only; no direct guest identifiers or payment details |
+| Hotel catalog | 28 hotel IDs aligned with Melissa’s canonical [db_simulated catalog](https://github.com/HospedaPlus/db_simulated/tree/main/catalog) |
+| Neon boundary | Additive `streaming` schema; F3-owned tables stay with the database workstream |
 
-Each synthetic reservation follows a full lifecycle: creation, zero to three modifications, then one outcome (cancellation about 37% as in the business context, no-show about 5%, otherwise check-in and check-out). Reservations of all 28 hotels are interleaved in simulated chronological order. By default 5% of events are delivered out of order (for example a modification before its creation); `reservation_version` lets consumers put them back in order.
+The hotel ID list follows Melissa’s shared catalog. **Channel and room-type values still need to be aligned with the F3 catalog before analytics joins are treated as authoritative.** The proposed migration is [`sql/streaming_schema.sql`](sql/streaming_schema.sql); it has not been applied to the shared Neon database.
 
-Events include a versioned envelope, simulated UTC occurrence time, hotel ID from the shared 28-hotel catalog, synthetic reservation ID, sales channel, refundable flag, and minimal reservation facts. Direct guest identifiers and payment details are excluded. See [docs/event-contract.md](docs/event-contract.md).
+## 🪄 New to Kafka?
 
-## Running the stream
+Start with [Kafka from zero: HospedaPlus edition](docs/kafka-from-zero.md) for a hotel-themed introduction and a hands-on exercise that lets you read the same topic from two independent consumer groups.
 
-```powershell
-# Continuous stream: 5 ev/s base, 15 ev/s peak for 10 s every 60 s, until Ctrl+C
-python -m src.producer --continuous
+## 🚀 Run the demonstrator locally
 
-# Same, limited to 75 seconds (covers two peaks)
-python -m src.producer --continuous --duration 75
+**You’ll need:** Docker Compose and Python 3.12 or later.
 
-# Batch mode (original behaviour): publish 20 events as fast as possible and stop
-python -m src.producer --count 20 --seed 42
-
-# In another terminal: consume and validate
-python -m src.consumer
-```
-
-Continuous mode logs the confirmed events of every second and ends with a summary such as `total=575 elapsed=75.1s average=7.7 ev/s peak=15 ev/s`. Options: `--rate`, `--peak-rate`, `--peak-every` (0 disables peaks), `--peak-duration`, `--duration`, `--count`, `--seed`, `--out-of-order-rate`, `--verbose` (log every event).
-
-Measured locally against the Compose RabbitMQ with publisher confirms: the default profile sustained exactly 15 ev/s during peaks and 5 ev/s otherwise, and the producer reached about 950 ev/s in batch mode, so the ≥ 10 ev/s peak has wide headroom.
-
-## Requirements
-
-- Python 3.12+
-- Docker Desktop with Docker Compose v2
-- Git
-
-## Quick start — Windows PowerShell
-
-```powershell
+```bash
 git clone https://github.com/HospedaPlus/buenavista-streaming.git
 cd buenavista-streaming
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
+cp .env.example .env
+docker compose up -d kafka
+python -m venv .venv
+# Activate the virtual environment, then:
 python -m pip install -e ".[dev]"
-Copy-Item .env.example .env
-docker compose up -d rabbitmq
-docker compose ps
-ruff check .
-ruff format --check .
-pytest
 python -m src.producer --count 20 --seed 42
 ```
 
-macOS/Linux: use `python3.12 -m venv .venv`, `source .venv/bin/activate`, and `cp .env.example .env`.
+Start the operational projector and Bronze capture in separate terminals:
 
-RabbitMQ AMQP is available at `localhost:5672`; the management UI is at `http://localhost:15672`. Local development defaults use `guest/guest`; do not expose this configuration to a network or reuse it in production.
-
-## Configuration
-
-See `.env.example`:
-- `RABBITMQ_HOST`
-- `RABBITMQ_PORT`
-- `RABBITMQ_USER`
-- `RABBITMQ_PASSWORD`
-- `RABBITMQ_VHOST`
-- `RABBITMQ_QUEUE`
-- `RABBITMQ_EXCHANGE`
-- `RABBITMQ_MAX_RETRIES`, `RABBITMQ_RETRY_DELAY_MS`, `RABBITMQ_DLQ`
-
-The producer and the consumer both declare the durable topic exchange, the durable queue and their binding (idempotent). The producer sends persistent messages, and enables publisher confirms. A broker confirmation means RabbitMQ accepted the message; it does not prove downstream processing or database persistence.
-
-## Quality checks
-
-```powershell
-ruff check .
-ruff format --check .
-pytest
-python -m src.producer --count 20 --seed 42
+```bash
+python -m src.consumer
+python -m src.bronze_consumer
 ```
 
-## Acceptance checklist
+Follow the [local runbook](docs/runbook.md) for topic creation, database setup, continuous simulation, and shutdown. The local broker is a single-node KRaft setup with PLAINTEXT security for development.
 
-- [ ] Confirm the event contract with the data-platform owner.
-- [ ] Pass unit tests and Ruff checks.
-- [ ] Verify RabbitMQ health and local publishing.
-- [x] Implement and test a consumer with acknowledgement, retry, and dead-letter strategy.
-- [x] Emit all six F2 event types continuously with peaks of at least 10 ev/s, including out-of-order events.
-- [ ] Verify idempotent persistence to the approved destination.
-- [ ] Confirm queue naming and separation from Airflow/Celery queues.
-- [ ] Confirm production credentials, network exposure, monitoring, and deployment ownership.
-- [ ] Publish final docs in Docusaurus.
+## ☁️ Deployment migration
 
-This is not a production deployment. No live reservation system is connected.
+The first deployment step is containerizing the same three runtime commands. The non-root image is defined in [`Dockerfile`](Dockerfile); the staged AWS proposal is in [`deploy/aws/README.md`](deploy/aws/README.md).
+
+**Proposed hosting shape:** Amazon MSK → separate ECS/Fargate producer, Neon projector, and S3 capture tasks → Amazon S3 Bronze. Neon remains the OLTP destination; Airflow and Silver/Gold remain data-platform responsibilities.
+
+Production rollout still needs approved AWS account/network inputs, topic and retention sizing, a reviewed Neon migration, catalog alignment, and operational/cost review. AWS tasks use IAM roles and short-lived tokens for MSK; the Neon TLS URL is supplied only to the OLTP task from the approved secret store. **No AWS resources have been provisioned, and no Neon migration has been applied.**
+
+## 👥 Team handoff
+
+Keep this repository’s event contract and architecture aligned with the tech lead’s approved diagram. **Vane is responsible for uploading the agreed documentation changes to Docusaurus.** Oscar, Melissa, and Johana coordinate the shared channel and room-type catalog values before downstream analytics depend on them.
+
+## 📚 Project map
+
+| Path | What lives here |
+|---|---|
+| `src/producer.py` | Synthetic event publisher |
+| `src/consumer.py` | Neon OLTP projection consumer |
+| `src/bronze_consumer.py` | S3 Bronze OLAP capture consumer |
+| `src/events.py` | Schema v1.1 event definitions and generator |
+| `docs/architecture/` | Editable Draw.io source and README diagram |
+| `docs/event-contract.md` | Event and delivery contract |
+| `docs/runbook.md` | Local setup and operation |
+| `sql/streaming_schema.sql` | Proposed additive Neon schema |
+| `deploy/aws/README.md` | AWS migration plan and deployment gates |
+| `deploy/aws/account-readiness.md` | Project account, access, and budget request checklist |
+
+---
+
+<div align="center">
+
+**🏨 HospedaPlus · Better signals for better stays.**
+
+<sub>Proposed architecture and project targets are not production guarantees. AWS costs must be validated in the AWS Pricing Calculator.</sub>
+
+**README author:** Johana Bolivar  
+**Project:** HospedaPlus
+
+</div>
