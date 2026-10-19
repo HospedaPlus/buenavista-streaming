@@ -11,6 +11,10 @@ load_dotenv()
 class Settings:
     bootstrap_servers: str = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
     security_protocol: str = os.getenv("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT")
+    sasl_mechanism: str = os.getenv("KAFKA_SASL_MECHANISM", "")
+    sasl_username: str = os.getenv("KAFKA_SASL_USERNAME", "")
+    sasl_password: str = os.getenv("KAFKA_SASL_PASSWORD", "")
+    ssl_ca_location: str = os.getenv("KAFKA_SSL_CA_LOCATION", "")
     topic: str = os.getenv("KAFKA_TOPIC", "buenavista.reservations.v1")
     retry_topic: str = os.getenv("KAFKA_RETRY_TOPIC", "buenavista.reservations.retry.v1")
     dlq_topic: str = os.getenv("KAFKA_DLQ_TOPIC", "buenavista.reservations.dlq.v1")
@@ -39,6 +43,24 @@ class Settings:
             raise ValueError("Bronze batch size and timeout must be positive")
         if not self.bootstrap_servers.strip():
             raise ValueError("KAFKA_BOOTSTRAP_SERVERS cannot be empty")
+        sasl_values = (self.sasl_mechanism, self.sasl_username, self.sasl_password)
+        if any(sasl_values) and not all(sasl_values):
+            raise ValueError("Kafka SASL mechanism, username, and password must be set together")
+        if all(sasl_values) and self.security_protocol != "SASL_SSL":
+            raise ValueError("Kafka SASL credentials require KAFKA_SECURITY_PROTOCOL=SASL_SSL")
+
+    def kafka_security_config(self) -> dict[str, str]:
+        """Return the shared librdkafka TLS/SASL settings for every client."""
+        config = {"security.protocol": self.security_protocol}
+        if self.sasl_mechanism:
+            config.update({
+                "sasl.mechanism": self.sasl_mechanism,
+                "sasl.username": self.sasl_username,
+                "sasl.password": self.sasl_password,
+            })
+        if self.ssl_ca_location:
+            config["ssl.ca.location"] = self.ssl_ca_location
+        return config
 
 
 def get_settings() -> Settings:
