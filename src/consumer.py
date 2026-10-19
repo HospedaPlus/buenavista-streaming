@@ -49,7 +49,7 @@ def consume_events() -> None:
     projector = NeonProjector(settings)
     consumer = Consumer({
         "bootstrap.servers": settings.bootstrap_servers,
-        "security.protocol": settings.security_protocol,
+        **settings.kafka_security_config(),
         "group.id": settings.neon_consumer_group,
         "client.id": "hospedaplus-f2-neon-projector",
         "enable.auto.commit": False,
@@ -58,7 +58,7 @@ def consume_events() -> None:
         "allow.auto.create.topics": False,
     })
     forwarder = Producer({"bootstrap.servers": settings.bootstrap_servers,
-                          "security.protocol": settings.security_protocol,
+                          **settings.kafka_security_config(),
                           "client.id": "hospedaplus-f2-neon-retry",
                           "acks": "all", "enable.idempotence": True})
     consumer.subscribe([settings.topic, settings.retry_topic])
