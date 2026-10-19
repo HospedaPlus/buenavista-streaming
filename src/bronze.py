@@ -13,8 +13,14 @@ class BronzeWriter:
     def write(self, raw_event: bytes, topic: str, partition: int, offset: int,
               kafka_timestamp_ms: int | None) -> str:
         now = datetime.now(UTC)
-        event = json.loads(raw_event.decode("utf-8"))
-        event_time = event["occurred_at"]
+        raw_text = raw_event.decode("utf-8", errors="replace")
+        try:
+            event = json.loads(raw_text)
+        except json.JSONDecodeError:
+            event = None
+        event_object = event if isinstance(event, dict) else None
+        event_time = event_object.get("occurred_at") if event_object else None
+        raw_value = event if event is not None else raw_text
         record = {
             "event_time": event_time,
             "ingest_time": now.isoformat(),
@@ -24,10 +30,10 @@ class BronzeWriter:
                 "offset": offset,
                 "timestamp_ms": kafka_timestamp_ms,
             },
-            "raw_event": event,
+            "raw_event": raw_value,
         }
         body = json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
-        hotel_id = event["hotel_id"]
+        hotel_id = event_object.get("hotel_id", "unknown") if event_object else "unknown"
         key = (f"{self.settings.bronze_prefix.rstrip('/')}/ingest_date={now.date().isoformat()}/"
                f"hotel_id={hotel_id}/topic={topic}/partition={partition}/offset={offset}.jsonl")
         if self.s3:
