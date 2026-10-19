@@ -23,7 +23,7 @@ def consume_events() -> None:
     consumer = Consumer(
         {
             "bootstrap.servers": settings.bootstrap_servers,
-            "security.protocol": settings.security_protocol,
+            **settings.kafka_security_config(),
             "group.id": settings.bronze_consumer_group,
             "client.id": "hospedaplus-f2-bronze-capture",
             "enable.auto.commit": False,
