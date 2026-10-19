@@ -53,11 +53,19 @@ STATUS_BY_EVENT_TYPE: dict[str, str] = {
 # Sales channels used by the commission (RN-02) and cancellation (RN-07) rules.
 Channel = Literal["ota", "direct", "agency", "corporate"]
 
-SCHEMA_VERSION = "1.1"
+SCHEMA_VERSION = "1.2"
 
 # Reuse the project's shared hotel identifier set to avoid generating unknown hotels.
-CATALOG_PATH = Path(__file__).parent / "catalog" / "hotel_ids.json"
-HOTEL_IDS = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+CATALOG_PATH = Path(__file__).parent / "catalog" / "catalog.json"
+CATALOG = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+HOTEL_IDS = [hotel["code"] for hotel in CATALOG["hotels"]]
+ROOM_TYPES = {item["code"]: item["max_guests"] for item in CATALOG["room_types"]}
+F2_CHANNELS = [item for item in CATALOG["channels"] if item["source"] == "F2"]
+CHANNEL_IDS_BY_TYPE = {
+    channel_type: [item["code"] for item in F2_CHANNELS if item["type"] == channel_type]
+    for channel_type in {item["type"] for item in F2_CHANNELS}
+}
+CHANNEL_ID_SET = {code for codes in CHANNEL_IDS_BY_TYPE.values() for code in codes}
 
 # Simulated clock origin. occurred_at values are simulated business time, which
 # advances much faster than wall-clock time so a short run covers whole stays.
@@ -72,8 +80,6 @@ MEAN_MINUTES_BETWEEN_BOOKINGS = 20
 CURRENCY_BY_COUNTRY = {"CO": "COP", "PT": "EUR", "ES": "EUR", "BR": "BRL", "MX": "MXN"}
 # Approximate nightly base rate per currency, so amounts are plausible per country.
 NIGHTLY_BASE_RATE = {"COP": 250_000, "EUR": 110, "BRL": 450, "MXN": 1_800}
-ROOM_TYPES = {"standard": 1.0, "deluxe": 1.4, "suite": 2.2}
-
 CHANNEL_WEIGHTS = {"ota": 0.50, "direct": 0.25, "agency": 0.15, "corporate": 0.10}
 REFUNDABLE_SHARE = {"ota": 0.70, "direct": 0.80, "agency": 0.90, "corporate": 1.0}
 
@@ -109,7 +115,15 @@ class ReservationPayload(BaseModel):
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     status: ReservationStatus
     channel: Channel
+    channel_id: str = Field(min_length=1, max_length=80)
     refundable: bool
+
+    @field_validator("channel_id")
+    @classmethod
+    def channel_must_match_shared_catalog(cls, value: str) -> str:
+        if value not in CHANNEL_ID_SET:
+            raise ValueError("channel_id must be an F2 code from the shared catalog")
+        return value
 
     @field_validator("check_out")
     @classmethod
@@ -127,7 +141,7 @@ class ReservationEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     event_id: UUID
-    schema_version: Literal["1.1"]
+    schema_version: Literal["1.2"]
     source: Literal["f2-channel-manager"]
     event_type: EventType
     occurred_at: datetime
@@ -168,6 +182,7 @@ def build_reservation_events(seed: int, number: int, booked_at: datetime) -> lis
     reservation_id = f"F2-RES-{seed:04d}-{number:08d}"
 
     channel = _weighted_choice(rng, CHANNEL_WEIGHTS)
+    channel_id = rng.choice(CHANNEL_IDS_BY_TYPE[channel])
     refundable = channel == "corporate" or rng.random() < REFUNDABLE_SHARE[channel]
 
     # Most bookings are made a few days ahead; a few are made weeks ahead.
@@ -179,8 +194,8 @@ def build_reservation_events(seed: int, number: int, booked_at: datetime) -> lis
 
     room_type = rng.choice(list(ROOM_TYPES))
     nights = rng.randint(1, 5)
-    guests = rng.randint(1, 4)
-    nightly = NIGHTLY_BASE_RATE[currency] * ROOM_TYPES[room_type] * rng.uniform(0.8, 1.3)
+    guests = rng.randint(1, ROOM_TYPES[room_type])
+    nightly = NIGHTLY_BASE_RATE[currency] * (1 + 0.2 * (ROOM_TYPES[room_type] - 1)) * rng.uniform(0.8, 1.3)
 
     def snapshot(status: str) -> dict:
         return {
@@ -192,6 +207,7 @@ def build_reservation_events(seed: int, number: int, booked_at: datetime) -> lis
             "currency": currency,
             "status": status,
             "channel": channel,
+            "channel_id": channel_id,
             "refundable": refundable,
         }
 
@@ -223,9 +239,10 @@ def build_reservation_events(seed: int, number: int, booked_at: datetime) -> lis
             nights = max(1, nights + rng.choice((-1, 1)))
         elif change == "room_type":
             room_type = rng.choice([r for r in ROOM_TYPES if r != room_type])
-            nightly = NIGHTLY_BASE_RATE[currency] * ROOM_TYPES[room_type] * rng.uniform(0.8, 1.3)
+            guests = min(guests, ROOM_TYPES[room_type])
+            nightly = NIGHTLY_BASE_RATE[currency] * (1 + 0.2 * (ROOM_TYPES[room_type] - 1)) * rng.uniform(0.8, 1.3)
         else:
-            guests = max(1, min(6, guests + rng.choice((-1, 1))))
+            guests = max(1, min(ROOM_TYPES[room_type], guests + rng.choice((-1, 1))))
         steps.append(("reservation.updated", booked_at + window * offset, snapshot("modified")))
 
     if cancelled_at is not None:

@@ -17,7 +17,7 @@ Kafka is the only message broker. F2's event tables are isolated in the additive
 
 ## Event simulator
 
-Generates synthetic events for the existing 28-hotel catalog, including created, updated, cancelled, no-show, checked-in, and checked-out lifecycle events. The v1.1 contract includes no direct guest identifiers. The simulator defaults to a 37% cancellation outcome and can produce intentionally out-of-order lifecycle events; a consumer must reconcile with `reservation_version`.
+Generates synthetic events for the existing 28-hotel catalog, including created, updated, cancelled, no-show, checked-in, and checked-out lifecycle events. The v1.2 contract includes no direct guest identifiers. The simulator defaults to a 37% cancellation outcome and can produce intentionally out-of-order lifecycle events; a consumer must reconcile with `reservation_version`.
 
 ## Quick start
 

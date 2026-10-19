@@ -1,6 +1,6 @@
 # Reservation event contract
 
-**Status:** F2 synthetic event contract v1.1. The envelope and lifecycle remain unchanged by the Kafka transport migration.
+**Status:** F2 synthetic event contract v1.2. The envelope and lifecycle remain unchanged by the Kafka transport migration.
 
 ## Source alignment
 
@@ -13,7 +13,7 @@ Events are synthetic and contain no guest identifiers or payment data. The event
 | Field | Type | Rule |
 |---|---|---|
 | `event_id` | UUID | Stable for a given synthetic seed and event index |
-| `schema_version` | string | `1.1` |
+| `schema_version` | string | `1.2` |
 | `source` | string | `f2-channel-manager` |
 | `event_type` | enum | created, updated, cancelled, no_show, checked_in, checked_out |
 | `occurred_at` | timestamp | Timezone-aware ISO 8601, normalized to UTC |
@@ -22,7 +22,7 @@ Events are synthetic and contain no guest identifiers or payment data. The event
 | `reservation_version` | integer ≥ 1 | Per-reservation lifecycle version |
 | `data` | object | Minimal reservation facts |
 
-Payload fields: `check_in`, `check_out`, `room_type`, `guests`, `total_amount`, `currency`, `status`, `channel`, `refundable`. Status follows event type; channel follows the existing F2 enum and RN-02 intent. Do not add direct identifiers.
+Payload fields: `check_in`, `check_out`, `room_type`, `guests`, `total_amount`, `currency`, `status`, `channel`, `channel_id`, `refundable`. Status follows event type; channel follows the existing F2 enum and RN-02 intent. Do not add direct identifiers.
 
 ## Kafka transport
 
@@ -43,7 +43,7 @@ The SQL in `sql/streaming_schema.sql` is a proposed additive migration and must 
 ```json
 {
   "event_id": "8d95f529-7e3a-52c3-8c78-a33d03371e88",
-  "schema_version": "1.1",
+  "schema_version": "1.2",
   "source": "f2-channel-manager",
   "event_type": "reservation.created",
   "occurred_at": "2026-10-01T00:00:00Z",
@@ -53,12 +53,12 @@ The SQL in `sql/streaming_schema.sql` is a proposed additive migration and must 
   "data": {
     "check_in": "2026-10-12",
     "check_out": "2026-10-16",
-    "room_type": "suite",
+    "room_type": "SUITE",
     "guests": 4,
     "total_amount": 895.64,
     "currency": "EUR",
     "status": "confirmed",
-    "channel": "ota",
+    "channel": "ota",\n    "channel_id": "expedia",
     "refundable": true
   }
 }
