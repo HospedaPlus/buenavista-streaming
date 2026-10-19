@@ -2,8 +2,10 @@
 import logging
 import signal
 import time
+
 from confluent_kafka import Consumer, KafkaError, KafkaException, Producer
 from pydantic import ValidationError
+
 from src.config import get_settings
 from src.events import ReservationEvent
 from src.sinks import NeonProjector

@@ -1,7 +1,9 @@
 """Independent OLAP Kafka group that captures raw events to S3 Bronze."""
 import logging
 import signal
+
 from confluent_kafka import Consumer, KafkaError, KafkaException
+
 from src.bronze import BronzeWriter
 from src.config import get_settings
 

@@ -2,6 +2,7 @@
 import json
 
 import psycopg
+
 from src.config import Settings
 from src.events import ReservationEvent
 

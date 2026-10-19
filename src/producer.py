@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass
 
 from confluent_kafka import Producer
+
 from src.config import get_settings
 from src.events import DEFAULT_OUT_OF_ORDER_RATE, generate_events
 
