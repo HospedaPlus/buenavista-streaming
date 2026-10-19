@@ -1,41 +1,35 @@
-# HospedaPlus Buenavista Streaming (F2)
+# HospedaPlus F2 Kafka Data Flow
 
-Synthetic F2 channel-manager lifecycle event producer and Kafka ingestion pipeline. This repository demonstrates the proposed event flow; it is not a production deployment.
+Synthetic F2 reservation events flow through Kafka into independent OLTP and OLAP paths, following the tech lead's approved architecture. The repository supplies the F2 producer, Neon projection consumer, and S3 Bronze capture consumer. It does not deploy the production services.
 
-## Flow
+## Approved flow
 
 ```
-Synthetic F2 source
-  → Kafka topic (key = reservation_id)
-  → consumer group
-       ├─ raw JSON → S3 Bronze (or local Bronze for development)
-       └─ Neon PostgreSQL: streaming.f2_events + streaming.f2_reservations_current
-  → Airflow can later read Bronze into Silver/Gold
+F2 channel-manager simulator
+  → Python event producer (validate v1.1, synthetic/no guest PII)
+  → Kafka: buenavista.reservations.v1 (key = reservation_id)
+      ├─ OLTP group → Neon PostgreSQL → streaming.f2_event_inbox
+      │                                  → streaming.f2_reservations_current
+      │                                  → booking and operations APIs
+      └─ OLAP group → S3 Bronze raw events + event/ingest times + Kafka coordinates
+                         → Airflow scheduled batch transforms
+                         → Silver (validate, deduplicate, pseudonymize)
+                         → Gold revenue facts and dimensions
+                         → Power BI dashboards
+
+Kafka retry topic → bounded retry attempts → DLQ for invalid/exhausted events
 ```
 
-Kafka is the only message broker. F2's event tables are isolated in the additive `streaming` schema and do not replace or write to Melissa's F3 `reservations` tables. The canonical shared catalog is maintained by [db_simulated](https://github.com/HospedaPlus/db_simulated/tree/main/catalog); this repo's hotel ID file is a pinned copy, not an independent catalog.
+## Melissa's F3 database contract
 
-## Event simulator
+The local hotel ID list contains the same 28 hotel codes as the canonical catalog in [HospedaPlus/db_simulated](https://github.com/HospedaPlus/db_simulated/tree/main/catalog), whose owner is the F3/database workstream. Keep the shared catalog authoritative. F2 events are a separate stream projection; do not insert them into the existing F3 `reservations` table or overwrite any F3 schema.
 
-Generates synthetic events for the existing 28-hotel catalog, including created, updated, cancelled, no-show, checked-in, and checked-out lifecycle events. The v1.2 contract includes no direct guest identifiers. The simulator defaults to a 37% cancellation outcome and can produce intentionally out-of-order lifecycle events; a consumer must reconcile with `reservation_version`.
+`sql/streaming_schema.sql` proposes the additive `streaming` schema with `f2_event_inbox` and `f2_reservations_current`. The Neon OLTP group writes both in one transaction and commits the Kafka offset only after success. The S3 Bronze group has a separate consumer group and commits only after its append-only raw record is persisted.
 
-## Quick start
+## Start locally
 
-See [the Kafka runbook](docs/runbook.md). Start the local KRaft broker, create the main and DLQ topics, configure a disposable PostgreSQL database, apply [the additive F2 schema](sql/streaming_schema.sql), then run the producer and consumer.
+Follow [docs/runbook.md](docs/runbook.md). The local KRaft broker is for development only. Configure Neon and S3 credentials through environment variables/AWS credential providers; never commit credentials. Airflow Silver/Gold processing belongs to the data-platform deployment.
 
-- `python -m src.producer --count 20 --seed 42`
-- `python -m src.consumer`
+## Scope and delivery semantics
 
-The local broker has no authentication and is for development only. A local Bronze directory is used when `BRONZE_S3_BUCKET` is empty. Configure the approved Neon URL and AWS credentials through environment configuration for the intended destinations.
-
-## Delivery and recovery
-
-The producer uses Kafka acknowledgements and idempotence. Consumer offsets are committed after Bronze and Neon writes; the sinks are idempotent by `event_id`, while the current projection accepts only a higher `reservation_version`. Invalid records are routed to a DLQ topic. Kafka-to-Neon/S3 is at-least-once across systems, not a distributed exactly-once transaction.
-
-## Database safety
-
-`sql/streaming_schema.sql` only creates F2-owned objects under `streaming`. It is a proposed migration; have the database owner review and apply it. No production database access or migration is performed by this repository change. Never run the F3 seed/reset workflow against shared Neon.
-
-## Scope limits
-
-This is an end-to-end demonstrator, not a production-ready system. Production requires approved broker security, AWS IAM, partition/retention sizing, observability, alerting, schema governance, and load/recovery validation. The source repository provides no credentials or AWS account details, so those are supplied at deployment time.
+Kafka gives each consumer group an independent view of the topic. Processing is at-least-once: consumers may replay after failures, so the OLTP inbox deduplicates by event ID and the Bronze key includes Kafka coordinates. The local single-node topology, per-record Bronze writes, and unauthenticated broker are a demonstrator, not a production-ready or cost-validated deployment.

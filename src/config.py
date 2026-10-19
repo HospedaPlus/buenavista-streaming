@@ -8,22 +8,27 @@ load_dotenv()
 @dataclass(frozen=True)
 class Settings:
     bootstrap_servers: str = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+    security_protocol: str = os.getenv("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT")
     topic: str = os.getenv("KAFKA_TOPIC", "buenavista.reservations.v1")
+    retry_topic: str = os.getenv("KAFKA_RETRY_TOPIC", "buenavista.reservations.retry.v1")
     dlq_topic: str = os.getenv("KAFKA_DLQ_TOPIC", "buenavista.reservations.dlq.v1")
-    consumer_group: str = os.getenv("KAFKA_CONSUMER_GROUP", "buenavista-bronze-neon-v1")
+    neon_consumer_group: str = os.getenv("KAFKA_NEON_GROUP", "buenavista-neon-projector-v1")
+    bronze_consumer_group: str = os.getenv("KAFKA_BRONZE_GROUP", "buenavista-bronze-capture-v1")
+    max_retries: int = int(os.getenv("KAFKA_MAX_RETRIES", "3"))
+    retry_delay_seconds: int = int(os.getenv("KAFKA_RETRY_DELAY_SECONDS", "5"))
     database_url: str = os.getenv("DATABASE_URL", "")
     bronze_bucket: str = os.getenv("BRONZE_S3_BUCKET", "")
     bronze_prefix: str = os.getenv("BRONZE_S3_PREFIX", "bronze/source=f2_channel_manager")
     bronze_local_dir: str = os.getenv("BRONZE_LOCAL_DIR", ".data/bronze")
-    security_protocol: str = os.getenv("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT")
 
     def __post_init__(self) -> None:
+        topics = (self.topic, self.retry_topic, self.dlq_topic)
+        if any(not topic.strip() for topic in topics) or len(set(topics)) != 3:
+            raise ValueError("Kafka main, retry, and DLQ topic names must be non-empty and distinct")
+        if self.max_retries < 0 or self.retry_delay_seconds < 0:
+            raise ValueError("Kafka retry values cannot be negative")
         if not self.bootstrap_servers.strip():
             raise ValueError("KAFKA_BOOTSTRAP_SERVERS cannot be empty")
-        if not self.topic.strip() or not self.dlq_topic.strip():
-            raise ValueError("Kafka topic names cannot be empty")
-        if self.topic == self.dlq_topic:
-            raise ValueError("KAFKA_TOPIC and KAFKA_DLQ_TOPIC must differ")
 
 def get_settings() -> Settings:
     return Settings()

@@ -1,4 +1,4 @@
-"""Unit tests for Kafka source rate shaping and event production helpers."""
+"""Unit tests for source rate shaping."""
 from src.producer import RateProfile
 
 def test_rate_profile_starts_with_peak():

@@ -1,65 +1,29 @@
 # Reservation event contract
 
-**Status:** F2 synthetic event contract v1.2. The envelope and lifecycle remain unchanged by the Kafka transport migration.
+**Status:** F2 synthetic event contract v1.1. The Kafka migration preserves this envelope.
 
 ## Source alignment
 
-F2 reads the pinned shared hotel ID list at `src/catalog/hotel_ids.json`; hotel IDs must match the canonical catalog in [HospedaPlus/db_simulated](https://github.com/HospedaPlus/db_simulated/tree/main/catalog). Do not edit the local copy in isolation. Melissa's F3 schema remains the source for F3 own-booking-engine reservations. F2 events are stored in the separate `streaming` schema and must not be inserted into F3's `reservations` table.
+The hotel IDs in `src/catalog/hotel_ids.json` are the 28-code pinned copy of the canonical shared catalog in [HospedaPlus/db_simulated](https://github.com/HospedaPlus/db_simulated/tree/main/catalog). Keep that source authoritative; update the local list only when the shared catalog is formally refreshed. F2 records remain separate from Melissa's F3 `reservations` table.
 
-Events are synthetic and contain no guest identifiers or payment data. The event payload is a channel-manager projection, not an F3 reservation row.
+Events are synthetic and contain no guest identifiers or payment data.
 
-## Envelope
+## Envelope and payload
 
-| Field | Type | Rule |
-|---|---|---|
-| `event_id` | UUID | Stable for a given synthetic seed and event index |
-| `schema_version` | string | `1.2` |
-| `source` | string | `f2-channel-manager` |
-| `event_type` | enum | created, updated, cancelled, no_show, checked_in, checked_out |
-| `occurred_at` | timestamp | Timezone-aware ISO 8601, normalized to UTC |
-| `hotel_id` | string | ID from the shared catalog |
-| `reservation_id` | string | Synthetic F2 reservation identifier |
-| `reservation_version` | integer ≥ 1 | Per-reservation lifecycle version |
-| `data` | object | Minimal reservation facts |
+Fields: `event_id` UUID, `schema_version` = `1.1`, `source` = `f2-channel-manager`, `event_type`, UTC `occurred_at`, `hotel_id`, `reservation_id`, `reservation_version`, and `data`.
 
-Payload fields: `check_in`, `check_out`, `room_type`, `guests`, `total_amount`, `currency`, `status`, `channel`, `channel_id`, `refundable`. Status follows event type; channel follows the existing F2 enum and RN-02 intent. Do not add direct identifiers.
+Payload fields: `check_in`, `check_out`, `room_type`, `guests`, `total_amount`, `currency`, `status`, `channel`, `refundable`. Event types are created, updated, cancelled, no-show, checked-in, checked-out. The current v1.1 event model must be coordinated with the data-platform owner before any contract version change.
 
-## Kafka transport
+## Kafka flow
 
-- Topic: `buenavista.reservations.v1`; DLQ: `buenavista.reservations.dlq.v1`.
-- The producer key is `reservation_id`, so Kafka preserves order for a reservation within its partition. The simulator may intentionally generate out-of-order lifecycle versions; consumers reconcile by `reservation_version`.
-- Producer uses `acks=all` and idempotence. These protect broker publication; they do not make Neon and S3 writes atomic.
-- Consumer commits offsets only after Bronze and Neon writes complete. Both sinks use `event_id` for replay-safe writes; the current-state projection accepts only higher reservation versions.
-- Invalid JSON/schema records go to the DLQ before their source offset is committed. Sink failures leave the offset uncommitted for replay.
+- Main topic: `buenavista.reservations.v1`; key: `reservation_id`; retry topic: `buenavista.reservations.retry.v1`; DLQ: `buenavista.reservations.dlq.v1`.
+- The producer uses `acks=all` and idempotence. Kafka keying preserves a reservation's partition order; lifecycle versioning handles intentionally out-of-order simulated events.
+- The OLTP consumer group writes `streaming.f2_event_inbox` and updates `streaming.f2_reservations_current` in one Neon transaction, then commits the Kafka offset. It does not write to F3-owned tables.
+- The independent OLAP consumer group writes append-only raw events to S3 Bronze with event time, ingestion time, and Kafka topic/partition/offset. S3 keys are partitioned by `ingest_date` and `hotel_id`; offsets commit after the Bronze write.
+- Invalid and repeatedly failing records go to retry/dead-letter topics. Duplicate delivery remains possible across systems; writes use event IDs and Kafka coordinates for idempotency.
 
-## Data destinations
+## Downstream analytics
 
-Raw, unmodified event JSON lands in S3 Bronze at `bronze/source=f2_channel_manager/event_date=YYYY-MM-DD/event_type=.../event_id=....json` (or the equivalent local directory for development). Neon stores the event ledger and a current-state projection under the additive `streaming` schema. This does not modify the F3-owned tables.
+Airflow scheduled batch jobs consume Bronze into Silver, where they validate/deduplicate and pseudonymize before analytics, then publish Gold revenue facts and dimensions for Power BI. These downstream transforms are outside this streaming repository's runtime.
 
-The SQL in `sql/streaming_schema.sql` is a proposed additive migration and must be reviewed/applied by the database owner. Do not point F3 seed, reset, or database tests at the shared Neon production database.
-
-## Example
-
-```json
-{
-  "event_id": "8d95f529-7e3a-52c3-8c78-a33d03371e88",
-  "schema_version": "1.2",
-  "source": "f2-channel-manager",
-  "event_type": "reservation.created",
-  "occurred_at": "2026-10-01T00:00:00Z",
-  "hotel_id": "HP-PT-001",
-  "reservation_id": "F2-RES-0042-00000000",
-  "reservation_version": 1,
-  "data": {
-    "check_in": "2026-10-12",
-    "check_out": "2026-10-16",
-    "room_type": "SUITE",
-    "guests": 4,
-    "total_amount": 895.64,
-    "currency": "EUR",
-    "status": "confirmed",
-    "channel": "ota",\n    "channel_id": "expedia",
-    "refundable": true
-  }
-}
-```
+Apply `sql/streaming_schema.sql` only through the approved Neon migration process. Never run F3 seed/reset workflows against the shared Neon database.

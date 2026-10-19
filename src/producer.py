@@ -5,7 +5,7 @@ import math
 import signal
 import time
 from dataclasses import dataclass
-from confluent_kafka import KafkaException, Producer
+from confluent_kafka import Producer
 from src.config import get_settings
 from src.events import DEFAULT_OUT_OF_ORDER_RATE, generate_events
 
@@ -78,18 +78,23 @@ def publish_events(count: int | None = 20, seed: int = 42,
                 next_send_at += 1 / target
 
             event = next(stream)
-            producer.produce(
-                topic=settings.topic,
-                key=event.reservation_id.encode("utf-8"),
-                value=event.model_dump_json().encode("utf-8"),
-                headers=[
-                    ("event_id", str(event.event_id).encode()),
-                    ("event_type", event.event_type.encode()),
-                    ("schema_version", event.schema_version.encode()),
-                    ("source", event.source.encode()),
-                ],
-                on_delivery=on_delivery,
-            )
+            while True:
+                try:
+                    producer.produce(
+                        topic=settings.topic,
+                        key=event.reservation_id.encode("utf-8"),
+                        value=event.model_dump_json().encode("utf-8"),
+                        headers=[
+                            ("event_id", str(event.event_id).encode()),
+                            ("event_type", event.event_type.encode()),
+                            ("schema_version", event.schema_version.encode()),
+                            ("source", event.source.encode()),
+                        ],
+                        on_delivery=on_delivery,
+                    )
+                    break
+                except BufferError:
+                    producer.poll(0.1)
             scheduled += 1
             producer.poll(0)
 
@@ -97,7 +102,7 @@ def publish_events(count: int | None = 20, seed: int = 42,
         if remaining:
             raise TimeoutError(f"{remaining} Kafka message(s) were not delivered before timeout")
         if failures:
-            raise KafkaException(failures[0])
+            raise RuntimeError(failures[0])
         logger.info("publish complete: scheduled=%d delivered=%d topic=%s", scheduled, delivered, settings.topic)
         return delivered
     except KeyboardInterrupt:

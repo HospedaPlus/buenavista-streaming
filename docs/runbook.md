@@ -1,6 +1,6 @@
 # Kafka local runbook
 
-## Start local Kafka
+## Start the local broker
 
 ```powershell
 Copy-Item .env.example .env
@@ -9,53 +9,54 @@ docker compose ps
 docker compose logs kafka
 ```
 
-The single-node KRaft broker is for local development and demonstrations only. It has no authentication and is not a production topology. The host bootstrap address is `localhost:9092`.
+This is a single-node KRaft development broker, without authentication. It is not a production topology.
 
-## Install
+Create the three topics before running the producer or consumers:
+
+```powershell
+docker compose exec kafka kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic buenavista.reservations.v1 --partitions 6 --replication-factor 1
+docker compose exec kafka kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic buenavista.reservations.retry.v1 --partitions 6 --replication-factor 1
+docker compose exec kafka kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic buenavista.reservations.dlq.v1 --partitions 6 --replication-factor 1
+```
+
+## Install and start the source
 
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
-```
-
-## Publish a batch
-
-```powershell
 python -m src.producer --count 20 --seed 42
 ```
 
-The producer sends v1.1 synthetic events to `buenavista.reservations.v1`, keyed by reservation ID. The topic has six local partitions. Broker-side topic creation is disabled, so create topics before first publish:
+The simulator produces schema v1.1 events to `buenavista.reservations.v1`, keyed by reservation ID.
 
-```powershell
-docker compose exec kafka kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic buenavista.reservations.v1 --partitions 6 --replication-factor 1
-docker compose exec kafka kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic buenavista.reservations.dlq.v1 --partitions 6 --replication-factor 1
-```
+## Run the independent consumer groups
 
-## Configure sinks and consume
-
-For local-only sink demonstration set `DATABASE_URL` to a disposable PostgreSQL database, apply `sql/streaming_schema.sql`, and leave `BRONZE_S3_BUCKET` empty to write under `.data/bronze`. To use the approved Neon and S3 destinations, set their credentials via environment/AWS credential chain. Never commit secrets. The consumer does not create or alter tables automatically.
+Apply `sql/streaming_schema.sql` to a disposable PostgreSQL database before starting the OLTP projector. Set `DATABASE_URL` via environment configuration; use the approved Neon connection only after the team authorizes the additive migration. The Bronze consumer writes under `.data/bronze` when `BRONZE_S3_BUCKET` is empty; for S3, provide the approved bucket and AWS credential chain.
 
 ```powershell
 python -m src.consumer
 ```
 
-Offset commits happen after both sinks succeed. If either sink fails, restart/retry replays the event; deterministic event IDs make the writes idempotent. Invalid records are copied to the DLQ.
+In another terminal:
 
-## Continuous stream
+```powershell
+python -m src.bronze_consumer
+```
+
+Each group consumes the main topic independently. Neon offset commits follow a successful database transaction. Bronze offset commits follow a successful object write. Replays are expected and handled using event IDs or Kafka coordinates.
+
+## Continuous demonstration
 
 ```powershell
 python -m src.producer --continuous --duration 75
 ```
 
-Defaults are 5 events/second, with 15 events/second for the first 10 seconds of each 60-second cycle. These are simulator settings, not measured production traffic.
+Defaults: 5 events per second with a 15 events per second peak for 10 seconds every 60 seconds. These are simulator settings.
 
-## Inspect topics
+## Downstream path
 
-```powershell
-docker compose exec kafka kafka-topics --bootstrap-server kafka:29092 --list
-docker compose exec kafka kafka-console-consumer --bootstrap-server kafka:29092 --topic buenavista.reservations.v1 --from-beginning --property print.key=true
-```
+Airflow scheduled batch jobs read S3 Bronze and build Silver (validation, deduplication, pseudonymization) and Gold (revenue facts/dimensions) for Power BI. This repository defines the Bronze handoff; deploy the Airflow transforms in the data-platform repository.
 
 ## Stop local services
 
@@ -63,4 +64,4 @@ docker compose exec kafka kafka-console-consumer --bootstrap-server kafka:29092 
 docker compose down
 ```
 
-Use `docker compose down -v` only when you intentionally want to delete local Kafka state. Production AWS/MSK, TLS/SASL, IAM, retention, partition count, replication, monitoring, and cost sizing require a separate deployment decision.
+`docker compose down -v` removes local Kafka state. Production Kafka security, MSK settings, partition/retention sizing, AWS IAM, S3 lifecycle, batching, monitoring, and recovery validation need deployment review.
