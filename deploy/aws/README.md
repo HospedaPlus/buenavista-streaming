@@ -1,55 +1,72 @@
 # AWS deployment migration (proposal)
 
-This guide describes a staged target for the approved F2 flow. It is a deployment plan, not Infrastructure as Code and not authorization to provision shared AWS resources. No AWS account, region, VPC, cluster, bucket, or production secret is embedded here.
+This guide explains the first cloud deployment in plain language. It is a proposed path, not authorization to provision shared AWS resources. AWS account, region, network owner, and non-production budget still need to be confirmed.
+
+## The hotel-to-cloud translation
+
+- **Amazon MSK** runs the Kafka broker and stores the event topics.
+- **ECS/Fargate** runs our Python program in containers. We run the producer, Neon projector, and Bronze capture as separate tasks.
+- **Amazon S3** stores the OLAP Bronze files.
+- **Neon PostgreSQL** stores the operational projection in the additive F2 schema.
+- **IAM task roles** give each task limited AWS permissions without placing long-lived cloud keys in the image.
 
 ## Proposed runtime
 
-- Amazon MSK for the Kafka topic, retry topic, and DLQ.
-- Three independently managed ECS/Fargate task roles and services: synthetic producer, Neon OLTP projector, and S3 Bronze capture. The producer may run as an on-demand task for demonstrations instead of a continuously running service.
-- Amazon S3 for append-only Bronze objects, partitioned by ingest date and hotel ID.
-- Neon remains the external OLTP database. The Airflow → Silver → Gold → Power BI path remains owned by the data-platform workstream.
+- Amazon MSK for `buenavista.reservations.v1`, retry, and dead-letter topics.
+- Separate ECS/Fargate tasks for the synthetic producer, Neon OLTP projector, and S3 Bronze capture.
+- Amazon S3 for append-only Bronze objects partitioned by ingest date and hotel ID.
+- Airflow → Silver → Gold → Power BI stays with the data-platform workstream.
 
-This is a starting design, not a claim that MSK Serverless or provisioned MSK is cheapest. Compare at least two broker/runtime options with explicit throughput, retention, availability, task hours, and data-volume assumptions in AWS Pricing Calculator before selecting a topology.
+MSK Serverless still has hourly cluster and partition charges plus data and storage charges. It is not automatically the cheapest option. Compare at least two architectures in the [AWS Pricing Calculator](https://calculator.aws/) using measured partitions, event volume, retention, and task hours before picking one.
 
-## Runtime image
+## Authentication: AWS IAM for MSK
 
-Build the image from the repository root and publish it to the team's approved image registry:
+The AWS container uses `KAFKA_AUTH_MODE=msk_iam`, `KAFKA_SECURITY_PROTOCOL=SASL_SSL`, and `AWS_REGION`. Its short-lived Kafka token is signed using credentials from the ECS task role. No static Kafka username or password is needed in AWS.
+
+The Docker image installs the AWS MSK signer through the `aws` optional dependency. The three clients (producer, Neon consumer, Bronze consumer) share this Kafka authentication configuration. The IAM policies should be separate and scoped to the required cluster, topics, and consumer groups:
+
+- Producer: connect and write to the main topic.
+- Neon projector: read main and retry topics, join its consumer group, and write retry/DLQ topics.
+- Bronze capture: read the main topic and join its consumer group.
+- All tasks: only the service actions they individually need. The Bronze task additionally writes its specific S3 prefix; the Neon task gets the Neon secret.
+
+ECS task roles are designed to provide AWS credentials to application code that uses AWS services. Give each task its own least-privilege role and keep the Neon TLS connection URL only in the OLTP task's approved secret store. [AWS ECS task role documentation](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html).
+
+## Build and run the same container
+
+From the repository root:
 
 ```sh
 docker build -t hospedaplus-f2-streaming:<tag> .
 ```
 
-Run the same immutable image as separate tasks with these commands:
+Configure three tasks from this image:
 
 - Producer: `python -m src.producer --continuous`
 - OLTP projection: `python -m src.consumer`
 - Bronze capture: `python -m src.bronze_consumer`
 
-Use a pinned image digest in task definitions after the image has been scanned and promoted. Configure CPU, memory, task count, health checks, and scale limits from measured load. Avoid running more than one synthetic producer unless duplicate test traffic is intended.
+Use an immutable image digest after scanning and promotion. Start the producer as an on-demand task for a controlled demonstration. Configure task sizing, restart behavior, health checks, and scaling after measuring the workload.
 
-## Required environment and secrets
+## Network and data controls
 
-Set the Kafka bootstrap endpoints, approved topic names, consumer group names, and `KAFKA_SECURITY_PROTOCOL=SASL_SSL`. The current Python clients support SASL mechanism, username, and password settings (`KAFKA_SASL_MECHANISM`, `KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD`) plus an optional CA path. Select an MSK authentication mode compatible with these settings and validate it end-to-end before deployment; IAM-based MSK authentication is not wired into this Python client yet.
+- Place MSK and Fargate tasks in the approved private network. Fargate tasks use network interfaces and require subnet and security-group configuration. [Fargate networking details](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-tasks.html).
+- Restrict Kafka ingress to those task security groups and require TLS.
+- Give Bronze capture access only to its assigned S3 prefix. Enable S3 Block Public Access, default encryption, and owner-approved lifecycle and retention policies.
+- Keep the synthetic event contract free of direct guest identifiers and payment information. Silver pseudonymizes before analytics.
+- Neon remains external to AWS; document the approved TLS network path from the task to Neon.
 
-Inject Kafka credentials and `DATABASE_URL` from the approved secret manager at task start. Do not put secret values in task definitions, image layers, GitHub variables, logs, or this repository. Use TLS for Neon. Configure the Bronze task to use its ECS task role for S3 rather than static AWS keys.
+## Step-by-step rollout
 
-## AWS and network controls
+1. **Learn locally:** follow [Kafka from zero](../../docs/kafka-from-zero.md) and see two independent consumer groups read the same topic.
+2. **Confirm the environment:** AWS account, region, network owner, non-production budget, topic partition/retention assumptions, Neon connection path, and data retention.
+3. **Package:** build the Docker image; run the producer and consumers locally; scan and publish the image to the approved ECR registry.
+4. **Review the database change:** inspect `sql/streaming_schema.sql`; apply only through the migration process to a disposable Neon branch first. Confirm F3-owned tables stay unchanged.
+5. **Provision non-production:** MSK cluster/topics, encrypted S3 bucket, task roles, ECS tasks, logs/alarms, and required secrets/networking using reviewed Infrastructure as Code.
+6. **Validate the complete flow:** verify independent groups, commit-after-write behavior, deduplication, retry/DLQ, Bronze partitions/coordinates, task restart, and graceful shutdown.
+7. **Review cost and operations:** compare at least two options in the AWS Pricing Calculator with measured usage. Approve logs, alarms, recovery, owners, cleanup, rollback, and production cutover.
+8. **Publish agreed documentation:** Vane uploads approved documentation changes to Docusaurus.
 
-- Run tasks in private subnets with egress only to required endpoints/destinations. Place MSK in the approved private network and restrict broker ingress to the task security groups.
-- Use separate least-privilege task roles. Only the Bronze task needs S3 object writes under its assigned Bronze prefix; restrict secret reads to the task that uses each secret.
-- Enable encryption in transit for Kafka and Neon; use S3 Block Public Access and default encryption. Define retention, lifecycle, recovery, and deletion policies with data owners.
-- Keep guest data synthetic. Silver must pseudonymize before analytics; do not copy direct guest identifiers into Bronze by expanding the event contract.
+## What is not deployed
 
-## Staged migration gates
-
-1. **Contract and target:** confirm schema v1.1, topic names/partition count/retention, F3 channel and room-type catalog mapping, AWS region/account, network ownership, MSK auth mode, Neon connection path, and data-retention requirements.
-2. **Image:** build and scan the container; smoke-run producer, OLTP consumer, and Bronze consumer against an isolated non-production Kafka cluster.
-3. **Data destinations:** obtain review of `sql/streaming_schema.sql`; apply it only through the team's approved migration workflow to a disposable Neon branch first. Validate replay/idempotency and prove F3 tables are unchanged. Create a non-production encrypted S3 bucket and lifecycle policy.
-4. **Infrastructure:** provision non-production MSK, topics, IAM/task roles, ECS tasks, logs/alarms, and secrets from approved IaC maintained by the infrastructure owner.
-5. **End-to-end validation:** confirm both consumer groups independently process events; verify offset-after-commit behavior, replay handling, DLQ visibility, Bronze partition layout and coordinates, task restarts, and controlled shutdown.
-6. **Cost and operations review:** compare at least two options in AWS Pricing Calculator using measured event volume and retention; approve alarms, ownership, runbooks, rollback, and production cutover.
-7. **Documentation:** keep this repository's source docs current. Vane uploads the agreed documentation changes to Docusaurus after the team approves them.
-
-## Current blockers before provisioning
-
-This repository does not yet contain the organization's approved IaC pipeline or AWS account/VPC inputs. The team still needs to select MSK authentication compatible with the current Python client, define non-production and production sizing/retention, settle the F3 catalog mapping, review the additive Neon schema, and provide the approved secret and network paths. Resolve these inputs before opening a deploy workflow or applying infrastructure.
+No AWS resources have been provisioned, and the Neon migration has not been applied. We still need the approved AWS account, region, network owner, and budget before provisioning. AWS resources can accrue costs while running, so the non-production plan must include cost review and a cleanup step.
