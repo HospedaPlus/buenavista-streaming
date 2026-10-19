@@ -113,7 +113,7 @@ Deployment means running the same producer and consumer programs on managed clou
 | **Neon PostgreSQL** | Store the operational projection in the additive F2 schema |
 | **CloudWatch** | Collect logs and alarms for the AWS tasks |
 
-Each consumer gets its own task and its own IAM role. For example, the Bronze task needs S3 write permission for its assigned prefix; it should not receive Neon database access. AWS ECS task roles provide AWS credentials to application code without putting long-lived AWS keys in the container. [AWS ECS task role guidance](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html).
+Each consumer gets its own task and its own IAM role. For example, the Bronze task needs S3 write permission for its assigned prefix; it should not receive Neon database access. AWS ECS task roles provide short-lived AWS credentials to application code. In our AWS path, the role also authenticates Kafka access to Amazon MSK, avoiding static Kafka passwords. [AWS ECS task role guidance](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html).
 
 ### The deployment steps we will work through
 
@@ -125,7 +125,7 @@ Each consumer gets its own task and its own IAM role. For example, the Bronze ta
 - [ ] **Test the complete path:** producer → both consumer groups → Neon and S3, including replay, retry/DLQ, and task restart.
 - [ ] **Get owner approval before production:** review the additive Neon schema, catalog mapping, costs, monitoring, recovery, and rollback plan.
 
-The full AWS proposal and current blockers are in [`deploy/aws/README.md`](../deploy/aws/README.md). **We have not deployed AWS infrastructure or applied the Neon migration.** We will build and review the artifacts first; cloud provisioning needs the approved AWS environment and budget.
+The full AWS proposal and current blockers are in [`deploy/aws/README.md`](../deploy/aws/README.md). The Docker image includes the Amazon MSK IAM signer; local development remains unauthenticated. **We have not deployed AWS infrastructure or applied the Neon migration.** We will build and review the artifacts first; cloud provisioning needs the approved AWS environment and budget.
 
 ## 6. What belongs to our team
 
