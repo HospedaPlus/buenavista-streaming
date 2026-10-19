@@ -22,6 +22,10 @@ class Settings:
     bronze_bucket: str = os.getenv("BRONZE_S3_BUCKET", "")
     bronze_prefix: str = os.getenv("BRONZE_S3_PREFIX", "bronze/source=f2_channel_manager")
     bronze_local_dir: str = os.getenv("BRONZE_LOCAL_DIR", ".data/bronze")
+    bronze_batch_size: int = int(os.getenv("BRONZE_BATCH_SIZE", "500"))
+    bronze_batch_timeout_seconds: int = int(
+        os.getenv("BRONZE_BATCH_TIMEOUT_SECONDS", "30")
+    )
 
     def __post_init__(self) -> None:
         topics = (self.topic, self.retry_topic, self.dlq_topic)
@@ -31,6 +35,8 @@ class Settings:
             )
         if self.max_retries < 0 or self.retry_delay_seconds < 0:
             raise ValueError("Kafka retry values cannot be negative")
+        if self.bronze_batch_size < 1 or self.bronze_batch_timeout_seconds < 1:
+            raise ValueError("Bronze batch size and timeout must be positive")
         if not self.bootstrap_servers.strip():
             raise ValueError("KAFKA_BOOTSTRAP_SERVERS cannot be empty")
 

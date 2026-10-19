@@ -44,7 +44,7 @@ In another terminal:
 python -m src.bronze_consumer
 ```
 
-Each group consumes the main topic independently. Neon offset commits follow a successful database transaction. Bronze offset commits follow a successful object write. Replays are expected and handled using event IDs or Kafka coordinates.
+Each group consumes the main topic independently. Neon offset commits follow a successful database transaction. Bronze batches up to 500 records or waits up to 30 seconds, groups raw records by ingest date and hotel, writes newline-delimited objects, then commits the highest processed offset per partition. Replays are expected and handled using event IDs or Kafka coordinates; Silver deduplicates by event ID and Kafka coordinates.
 
 ## Continuous demonstration
 

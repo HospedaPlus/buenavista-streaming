@@ -19,7 +19,7 @@ Payload fields: `check_in`, `check_out`, `room_type`, `guests`, `total_amount`, 
 - Main topic: `buenavista.reservations.v1`; key: `reservation_id`; retry topic: `buenavista.reservations.retry.v1`; DLQ: `buenavista.reservations.dlq.v1`.
 - The producer uses `acks=all` and idempotence. Kafka keying preserves a reservation's partition order; lifecycle versioning handles intentionally out-of-order simulated events.
 - The OLTP consumer group writes `streaming.f2_event_inbox` and updates `streaming.f2_reservations_current` in one Neon transaction, then commits the Kafka offset. It does not write to F3-owned tables.
-- The independent OLAP consumer group writes append-only raw events to S3 Bronze with event time, ingestion time, and Kafka topic/partition/offset. S3 keys are partitioned by `ingest_date` and `hotel_id`; offsets commit after the Bronze write.
+- The independent OLAP consumer group writes append-only raw events to S3 Bronze with event time, ingestion time, and Kafka topic/partition/offset. S3 keys are partitioned by `ingest_date` and `hotel_id`; offsets commit after all S3 objects for a micro-batch are persisted. Bronze files contain newline-delimited raw records grouped by ingest date and hotel.
 - Invalid and repeatedly failing records go to retry/dead-letter topics. Duplicate delivery remains possible across systems; writes use event IDs and Kafka coordinates for idempotency.
 
 ## Downstream analytics
