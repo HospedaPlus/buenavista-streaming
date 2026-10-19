@@ -96,7 +96,7 @@ The first deployment step is containerizing the same three runtime commands. The
 
 **Proposed hosting shape:** Amazon MSK → separate ECS/Fargate producer, Neon projector, and S3 capture tasks → Amazon S3 Bronze. Neon remains the OLTP destination; Airflow and Silver/Gold remain data-platform responsibilities.
 
-Production rollout still needs approved AWS account/network inputs, Kafka authentication selection, topic and retention sizing, a reviewed Neon migration, catalog alignment, and operational/cost review. Kafka TLS/SASL configuration is available to the Python clients; credentials must come from the approved secret store at runtime. **No AWS resources have been provisioned, and no Neon migration has been applied.**
+Production rollout still needs approved AWS account/network inputs, topic and retention sizing, a reviewed Neon migration, catalog alignment, and operational/cost review. AWS tasks use IAM roles and short-lived tokens for MSK; the Neon TLS URL is supplied only to the OLTP task from the approved secret store. **No AWS resources have been provisioned, and no Neon migration has been applied.**
 
 ## 👥 Team handoff
 
