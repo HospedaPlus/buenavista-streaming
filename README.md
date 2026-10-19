@@ -115,6 +115,7 @@ Keep this repository’s event contract and architecture aligned with the tech l
 | `docs/runbook.md` | Local setup and operation |
 | `sql/streaming_schema.sql` | Proposed additive Neon schema |
 | `deploy/aws/README.md` | AWS migration plan and deployment gates |
+| `deploy/aws/account-readiness.md` | Project account, access, and budget request checklist |
 
 ---
 
