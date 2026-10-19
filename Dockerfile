@@ -7,7 +7,7 @@ WORKDIR /app
 
 COPY pyproject.toml README.md ./
 COPY src ./src
-RUN python -m pip install --no-cache-dir .
+RUN python -m pip install --no-cache-dir ".[aws]"
 
 RUN useradd --system --uid 10001 --create-home appuser
 USER 10001:10001
