@@ -62,6 +62,10 @@ The same event can serve both paths without making the operational database doub
 
 The hotel ID list follows Melissa’s shared catalog. **Channel and room-type values still need to be aligned with the F3 catalog before analytics joins are treated as authoritative.** The proposed migration is [`sql/streaming_schema.sql`](sql/streaming_schema.sql); it has not been applied to the shared Neon database.
 
+## 🪄 New to Kafka?
+
+Start with [Kafka from zero: HospedaPlus edition](docs/kafka-from-zero.md) for a hotel-themed introduction and a hands-on exercise that lets you read the same topic from two independent consumer groups.
+
 ## 🚀 Run the demonstrator locally
 
 **You’ll need:** Docker Compose and Python 3.12 or later.
