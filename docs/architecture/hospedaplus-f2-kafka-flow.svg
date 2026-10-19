@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1900" height="920" viewBox="0 0 1900 920" role="img" aria-labelledby="title desc">
+<title id="title">HospedaPlus F2 Kafka Data Flow</title>
+<desc id="desc">A synthetic reservation event source and Python producer send v1.1 events to Kafka, which branches to a Neon PostgreSQL operational projection and an S3 Bronze analytics path through Airflow, Silver, Gold, and Power BI.</desc>
+<defs>
+ <marker id="arrow-teal" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#168D83"/></marker>
+ <marker id="arrow-blue" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#477DC0"/></marker>
+ <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#43835B"/></marker>
+ <marker id="arrow-gold" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#BB8730"/></marker>
+ <filter id="shadow" x="-15%" y="-15%" width="130%" height="140%"><feDropShadow dx="0" dy="5" stdDeviation="8" flood-color="#1E3354" flood-opacity=".09"/></filter>
+ <style>
+  text{font-family:Inter,Segoe UI,Arial,sans-serif;fill:#172B45}.title{font-size:34px;font-weight:750}.sub{font-size:17px;fill:#61718A}
+  .lane{font-size:15px;font-weight:750;letter-spacing:1.5px}.h{font-size:19px;font-weight:700}.p{font-size:14px;fill:#52647C}
+  .tiny{font-size:12px;fill:#61718A}.node{fill:#fff;stroke-width:2}
+ </style>
+</defs>
+<rect width="1900" height="920" rx="24" fill="#F5F8FC"/>
+<rect x="0" y="0" width="1900" height="132" rx="24" fill="#10233F"/>
+<path d="M0 108 Q400 145 820 115 T1900 105 V132 H0Z" fill="#173456" opacity=".9"/>
+<text x="60" y="58" class="title" fill="#fff">🏨 HospedaPlus · F2 Kafka Data Flow</text>
+<text x="62" y="92" font-size="16" fill="#C4D4E7">A shared reservation event stream branching into operations and analytics</text>
+<rect x="1530" y="38" width="300" height="42" rx="21" fill="#203B5D"/>
+<text x="1680" y="65" text-anchor="middle" font-size="14" font-weight="700" fill="#7FE0D2">APPROVED TARGET FLOW</text>
+
+<!-- Source area -->
+<rect x="40" y="180" width="270" height="485" rx="20" fill="#F4F0FF" stroke="#A68AE7" stroke-width="2"/>
+<text x="62" y="216" class="lane" fill="#6745B6">🛎️ F2 · STREAMING SOURCE</text>
+<rect class="node" x="62" y="248" width="226" height="142" rx="15" stroke="#A68AE7" filter="url(#shadow)"/>
+<text x="175" y="282" text-anchor="middle" class="h">Channel Manager</text>
+<text x="175" y="309" text-anchor="middle" class="p">reservation simulator</text>
+<text x="175" y="343" text-anchor="middle" class="tiny">created · updated · cancelled</text>
+<text x="175" y="365" text-anchor="middle" class="tiny">no-show · check-in · check-out</text>
+<path d="M175 393 V423" stroke="#8D70CE" stroke-width="3" marker-end="url(#arrow-teal)"/>
+<rect class="node" x="62" y="435" width="226" height="142" rx="15" stroke="#A68AE7" filter="url(#shadow)"/>
+<text x="175" y="472" text-anchor="middle" class="h">Python producer</text>
+<text x="175" y="502" text-anchor="middle" class="p">validate event schema v1.1</text>
+<text x="175" y="532" text-anchor="middle" class="p">synthetic payload · no guest PII</text>
+<text x="175" y="624" text-anchor="middle" class="tiny">💡 One stable key per reservation</text>
+
+<!-- Kafka -->
+<path d="M310 505 H355" stroke="#168D83" stroke-width="4" marker-end="url(#arrow-teal)"/>
+<rect x="372" y="358" width="270" height="190" rx="22" fill="#E6F7F4" stroke="#168D83" stroke-width="3" filter="url(#shadow)"/>
+<text x="507" y="400" text-anchor="middle" font-size="23" font-weight="750" fill="#0F675E">🔀 Apache Kafka</text>
+<text x="507" y="438" text-anchor="middle" class="p">buenavista.reservations.v1</text>
+<text x="507" y="468" text-anchor="middle" class="p">message key: reservation_id</text>
+<rect x="410" y="490" width="194" height="34" rx="17" fill="#C7EEE7"/>
+<text x="507" y="512" text-anchor="middle" font-size="12" font-weight="700" fill="#0F675E">INDEPENDENT CONSUMER GROUPS</text>
+<rect x="392" y="697" width="230" height="70" rx="14" fill="#FFF5E2" stroke="#D8A342" stroke-width="2"/>
+<text x="507" y="725" text-anchor="middle" font-size="15" font-weight="700" fill="#795511">🚨 Retry → Dead-letter</text>
+<text x="507" y="748" text-anchor="middle" class="tiny">invalid / exhausted events</text>
+<path d="M507 550 V680" stroke="#BB8730" stroke-width="2.5" stroke-dasharray="7 7" marker-end="url(#arrow-gold)"/>
+
+<!-- Operational lane -->
+<rect x="690" y="170" width="1170" height="282" rx="20" fill="#EDF4FD" stroke="#7DA8D9" stroke-width="2"/>
+<text x="720" y="207" class="lane" fill="#346AA9">🧾 OLTP · OPERATIONAL PATH</text>
+<rect class="node" x="720" y="238" width="240" height="160" rx="15" stroke="#7DA8D9" filter="url(#shadow)"/>
+<text x="840" y="274" text-anchor="middle" class="h">Reservation projector</text>
+<text x="840" y="305" text-anchor="middle" class="p">independent consumer group</text>
+<text x="840" y="346" text-anchor="middle" class="tiny">idempotent processing</text>
+<text x="840" y="369" text-anchor="middle" class="tiny">commit offset after DB commit</text>
+<rect class="node" x="1010" y="230" width="460" height="176" rx="15" stroke="#7DA8D9" filter="url(#shadow)"/>
+<text x="1240" y="267" text-anchor="middle" class="h">Neon PostgreSQL · OLTP</text>
+<text x="1240" y="300" text-anchor="middle" class="p">Additive streaming schema · preserve F3 tables</text>
+<rect x="1050" y="320" width="190" height="55" rx="10" fill="#F4F8FE" stroke="#BED1E8"/>
+<text x="1145" y="343" text-anchor="middle" font-size="13" font-weight="700">f2_event_inbox</text>
+<text x="1145" y="362" text-anchor="middle" class="tiny">dedupe by event_id</text>
+<rect x="1260" y="320" width="185" height="55" rx="10" fill="#F4F8FE" stroke="#BED1E8"/>
+<text x="1352" y="343" text-anchor="middle" font-size="13" font-weight="700">f2_reservations_current</text>
+<text x="1352" y="362" text-anchor="middle" class="tiny">newer version wins</text>
+<rect class="node" x="1520" y="252" width="300" height="130" rx="15" stroke="#7DA8D9" filter="url(#shadow)"/>
+<text x="1670" y="293" text-anchor="middle" class="h">Booking &amp; operations APIs</text>
+<text x="1670" y="326" text-anchor="middle" class="p">read current availability / state</text>
+<text x="1670" y="352" text-anchor="middle" class="tiny">operational serving layer</text>
+<path d="M642 400 H672 V318 H710" fill="none" stroke="#477DC0" stroke-width="3" marker-end="url(#arrow-blue)"/>
+<path d="M960 318 H995" stroke="#477DC0" stroke-width="3" marker-end="url(#arrow-blue)"/>
+<path d="M1470 318 H1505" stroke="#477DC0" stroke-width="3" marker-end="url(#arrow-blue)"/>
+
+<!-- Analytics lane -->
+<rect x="690" y="485" width="1170" height="365" rx="20" fill="#EFF7F1" stroke="#79AD86" stroke-width="2"/>
+<text x="720" y="522" class="lane" fill="#39734A">📊 OLAP · ANALYTICS PATH</text>
+<rect class="node" x="715" y="565" width="175" height="125" rx="15" stroke="#79AD86" filter="url(#shadow)"/>
+<text x="802" y="599" text-anchor="middle" class="h">Bronze capture</text>
+<text x="802" y="630" text-anchor="middle" class="p">independent consumer</text>
+<text x="802" y="658" text-anchor="middle" class="tiny">micro-batches</text>
+<rect class="node" x="918" y="555" width="220" height="145" rx="15" stroke="#79AD86" filter="url(#shadow)"/>
+<text x="1028" y="589" text-anchor="middle" class="h">Amazon S3 · Bronze</text>
+<text x="1028" y="620" text-anchor="middle" class="p">append-only raw events</text>
+<text x="1028" y="650" text-anchor="middle" class="tiny">ingest_date / hotel_id</text>
+<text x="1028" y="672" text-anchor="middle" class="tiny">event + ingest time + offsets</text>
+<rect class="node" x="1164" y="565" width="162" height="125" rx="15" stroke="#79AD86" filter="url(#shadow)"/>
+<text x="1245" y="601" text-anchor="middle" class="h">Airflow</text>
+<text x="1245" y="632" text-anchor="middle" class="p">scheduled batch</text>
+<text x="1245" y="656" text-anchor="middle" class="p">transforms</text>
+<rect class="node" x="1352" y="565" width="154" height="125" rx="15" stroke="#79AD86" filter="url(#shadow)"/>
+<text x="1429" y="601" text-anchor="middle" class="h">Silver</text>
+<text x="1429" y="632" text-anchor="middle" class="p">validate · dedupe</text>
+<text x="1429" y="656" text-anchor="middle" class="tiny">pseudonymize</text>
+<rect class="node" x="1532" y="565" width="142" height="125" rx="15" stroke="#79AD86" filter="url(#shadow)"/>
+<text x="1603" y="601" text-anchor="middle" class="h">Gold</text>
+<text x="1603" y="632" text-anchor="middle" class="p">revenue facts</text>
+<text x="1603" y="656" text-anchor="middle" class="p">+ dimensions</text>
+<rect class="node" x="1698" y="565" width="142" height="125" rx="15" stroke="#D8A342" filter="url(#shadow)"/>
+<text x="1769" y="601" text-anchor="middle" class="h">Power BI</text>
+<text x="1769" y="632" text-anchor="middle" class="p">hotel insights</text>
+<text x="1769" y="656" text-anchor="middle" class="p">dashboards</text>
+<path d="M642 470 H665 V627 H705" fill="none" stroke="#43835B" stroke-width="3" marker-end="url(#arrow-green)"/>
+<path d="M890 627 H903" stroke="#43835B" stroke-width="3" marker-end="url(#arrow-green)"/>
+<path d="M1138 627 H1149" stroke="#43835B" stroke-width="3" marker-end="url(#arrow-green)"/>
+<path d="M1326 627 H1337" stroke="#43835B" stroke-width="3" marker-end="url(#arrow-green)"/>
+<path d="M1506 627 H1517" stroke="#43835B" stroke-width="3" marker-end="url(#arrow-green)"/>
+<path d="M1674 627 H1683" stroke="#BB8730" stroke-width="3" marker-end="url(#arrow-gold)"/>
+<text x="952" y="744" class="tiny">Raw bronze first · scheduled transforms after ingestion · offsets only after durable writes</text>
+<rect x="40" y="808" width="602" height="42" rx="14" fill="#E8EDF4"/>
+<text x="341" y="834" text-anchor="middle" font-size="13" font-weight="650" fill="#445873">🔒 Synthetic guest data · TLS/SASL at deployment · least-privilege access</text>
+<text x="950" y="891" text-anchor="middle" font-size="12" fill="#75849A">HospedaPlus · proposed deployment target · not a production deployment</text>
+</svg>
