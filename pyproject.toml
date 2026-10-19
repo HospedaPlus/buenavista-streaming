@@ -17,6 +17,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+aws = [
+  "aws-msk-iam-sasl-signer-python>=1,<2",
+]
 dev = [
   "pytest>=8.3,<9",
   "ruff>=0.8,<1",
