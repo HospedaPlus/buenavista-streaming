@@ -1,5 +1,4 @@
 """Neon OLTP reservation projection consumer (independent Kafka group)."""
-import json
 import logging
 import signal
 import time
@@ -13,17 +12,21 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger(__name__)
 shutdown = False
 
+
 def request_shutdown(signum, _frame):
     global shutdown
     shutdown = True
     logger.info("Shutdown requested (signal %s)", signum)
 
+
 def _header_map(message):
     return dict(message.headers() or [])
+
 
 def _retry_count(message):
     raw = _header_map(message).get("retry_count", b"0")
     return int(raw.decode("ascii") if isinstance(raw, bytes) else raw)
+
 
 def _forward(producer, topic, message, reason, retry_count=None):
     headers = [(key, value) for key, value in (message.headers() or []) if key != "retry_count"]
@@ -37,6 +40,7 @@ def _forward(producer, topic, message, reason, retry_count=None):
         raise TimeoutError(f"Timed out forwarding record to {topic}")
     if result and result[0] is not None:
         raise KafkaException(result[0])
+
 
 def consume_events() -> None:
     settings = get_settings()
@@ -89,7 +93,9 @@ def consume_events() -> None:
                 else:
                     _forward(forwarder, settings.dlq_topic, msg, exc)
                     consumer.commit(message=msg, asynchronous=False)
-                    logger.exception("Retry limit exhausted; sent event_id=%s to DLQ", event.event_id)
+                    logger.exception(
+                        "Retry limit exhausted; sent event_id=%s to DLQ", event.event_id
+                    )
                 continue
             consumer.commit(message=msg, asynchronous=False)
             logger.info("OLTP transaction committed event_id=%s reservation_id=%s version=%s",
@@ -99,10 +105,12 @@ def consume_events() -> None:
         forwarder.flush(10)
         projector.close()
 
+
 def main() -> None:
     signal.signal(signal.SIGINT, request_shutdown)
     signal.signal(signal.SIGTERM, request_shutdown)
     consume_events()
+
 
 if __name__ == "__main__":
     main()

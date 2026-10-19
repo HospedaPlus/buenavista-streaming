@@ -1,8 +1,10 @@
 """Neon OLTP projector for the F2 Kafka consumer group."""
 import json
+
 import psycopg
 from src.config import Settings
 from src.events import ReservationEvent
+
 
 class NeonProjector:
     """Persist an F2 inbox and monotonic current-state projection in one DB transaction."""

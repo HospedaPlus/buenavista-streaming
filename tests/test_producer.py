@@ -1,6 +1,7 @@
 """Unit tests for source rate shaping."""
 from src.producer import RateProfile
 
+
 def test_rate_profile_starts_with_peak():
     profile = RateProfile(base_rate=5, peak_rate=15, peak_every_s=60, peak_duration_s=10)
     assert profile.rate_at(0) == 15

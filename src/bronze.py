@@ -5,6 +5,7 @@ from pathlib import Path
 import boto3
 from src.config import Settings
 
+
 class BronzeWriter:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -40,7 +41,12 @@ class BronzeWriter:
             self.s3.put_object(Bucket=self.settings.bronze_bucket, Key=key,
                                Body=body.encode("utf-8"), ContentType="application/x-ndjson")
         else:
-            path = Path(self.settings.bronze_local_dir) / f"ingest_date={now.date().isoformat()}" / f"hotel_id={hotel_id}" / f"partition={partition}"
+            path = (
+                Path(self.settings.bronze_local_dir)
+                / f"ingest_date={now.date().isoformat()}"
+                / f"hotel_id={hotel_id}"
+                / f"partition={partition}"
+            )
             path.mkdir(parents=True, exist_ok=True)
             (path / f"offset={offset}.jsonl").write_text(body, encoding="utf-8")
         return key

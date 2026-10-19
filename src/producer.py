@@ -5,12 +5,14 @@ import math
 import signal
 import time
 from dataclasses import dataclass
+
 from confluent_kafka import Producer
 from src.config import get_settings
 from src.events import DEFAULT_OUT_OF_ORDER_RATE, generate_events
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class RateProfile:
@@ -29,6 +31,7 @@ class RateProfile:
         if self.peak_every_s and elapsed_s % self.peak_every_s < self.peak_duration_s:
             return self.peak_rate
         return self.base_rate
+
 
 def publish_events(count: int | None = 20, seed: int = 42,
                    profile: RateProfile | None = None, duration_s: float | None = None,
@@ -103,12 +106,18 @@ def publish_events(count: int | None = 20, seed: int = 42,
             raise TimeoutError(f"{remaining} Kafka message(s) were not delivered before timeout")
         if failures:
             raise RuntimeError(failures[0])
-        logger.info("publish complete: scheduled=%d delivered=%d topic=%s", scheduled, delivered, settings.topic)
+        logger.info(
+            "publish complete: scheduled=%d delivered=%d topic=%s",
+            scheduled,
+            delivered,
+            settings.topic,
+        )
         return delivered
     except KeyboardInterrupt:
         producer.flush(30)
         logger.info("publish stopped: scheduled=%d delivered=%d", scheduled, delivered)
         return delivered
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -123,12 +132,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out-of-order-rate", type=float, default=DEFAULT_OUT_OF_ORDER_RATE)
     return parser
 
+
 def main() -> None:
     args = build_parser().parse_args()
     signal.signal(signal.SIGTERM, signal.default_int_handler)
-    profile = RateProfile(args.rate, args.peak_rate, args.peak_every, args.peak_duration) if args.continuous else None
-    publish_events(args.count if args.continuous else (args.count or 20), args.seed, profile,
-                   args.duration, args.out_of_order_rate)
+    profile = (
+        RateProfile(args.rate, args.peak_rate, args.peak_every, args.peak_duration)
+        if args.continuous
+        else None
+    )
+    publish_events(
+        args.count if args.continuous else (args.count or 20),
+        args.seed,
+        profile,
+        args.duration,
+        args.out_of_order_rate,
+    )
+
 
 if __name__ == "__main__":
     main()

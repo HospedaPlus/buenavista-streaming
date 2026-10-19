@@ -1,9 +1,11 @@
 """Environment-based settings for the F2 Kafka pipeline."""
 import os
 from dataclasses import dataclass
+
 from dotenv import load_dotenv
 
 load_dotenv()
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -24,11 +26,14 @@ class Settings:
     def __post_init__(self) -> None:
         topics = (self.topic, self.retry_topic, self.dlq_topic)
         if any(not topic.strip() for topic in topics) or len(set(topics)) != 3:
-            raise ValueError("Kafka main, retry, and DLQ topic names must be non-empty and distinct")
+            raise ValueError(
+                "Kafka main, retry, and DLQ topic names must be non-empty and distinct"
+            )
         if self.max_retries < 0 or self.retry_delay_seconds < 0:
             raise ValueError("Kafka retry values cannot be negative")
         if not self.bootstrap_servers.strip():
             raise ValueError("KAFKA_BOOTSTRAP_SERVERS cannot be empty")
+
 
 def get_settings() -> Settings:
     return Settings()

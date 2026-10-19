@@ -9,10 +9,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger(__name__)
 shutdown = False
 
+
 def request_shutdown(signum, _frame):
     global shutdown
     shutdown = True
     logger.info("Shutdown requested (signal %s)", signum)
+
 
 def consume_events() -> None:
     settings = get_settings()
@@ -49,10 +51,12 @@ def consume_events() -> None:
     finally:
         consumer.close()
 
+
 def main() -> None:
     signal.signal(signal.SIGINT, request_shutdown)
     signal.signal(signal.SIGTERM, request_shutdown)
     consume_events()
+
 
 if __name__ == "__main__":
     main()
