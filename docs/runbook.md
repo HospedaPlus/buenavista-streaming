@@ -1,50 +1,61 @@
-# Local runbook
+# Kafka local runbook
 
-## Start RabbitMQ
+## Start local Kafka
 
 ```powershell
 Copy-Item .env.example .env
-docker compose up -d rabbitmq
+docker compose up -d kafka
 docker compose ps
-docker compose logs rabbitmq
+docker compose logs kafka
 ```
 
-RabbitMQ AMQP port: `5672`. Management UI: `http://localhost:15672`. Local defaults are `guest/guest`; use them only for local development.
+The single-node KRaft broker is for local development and demonstrations only. It has no authentication and is not a production topology. The host bootstrap address is `localhost:9092`.
 
-## Install and validate
+## Install
 
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
-ruff check .
-ruff format --check .
-pytest
 ```
 
-## Publish a controlled batch
+## Publish a batch
 
 ```powershell
 python -m src.producer --count 20 --seed 42
 ```
 
-Expected: the summary line reports `total=20` messages confirmed by RabbitMQ. Open the management UI, select Queues and Streams, and inspect `buenavista.reservation.events`; the ready-message count should reflect messages waiting for a consumer.
+The producer sends v1.1 synthetic events to `buenavista.reservations.v1`, keyed by reservation ID. The topic has six local partitions. Broker-side topic creation is disabled, so create topics before first publish:
 
-## Run the continuous stream
+```powershell
+docker compose exec kafka kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic buenavista.reservations.v1 --partitions 6 --replication-factor 1
+docker compose exec kafka kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic buenavista.reservations.dlq.v1 --partitions 6 --replication-factor 1
+```
+
+## Configure sinks and consume
+
+For local-only sink demonstration set `DATABASE_URL` to a disposable PostgreSQL database, apply `sql/streaming_schema.sql`, and leave `BRONZE_S3_BUCKET` empty to write under `.data/bronze`. To use the approved Neon and S3 destinations, set their credentials via environment/AWS credential chain. Never commit secrets. The consumer does not create or alter tables automatically.
+
+```powershell
+python -m src.consumer
+```
+
+Offset commits happen after both sinks succeed. If either sink fails, restart/retry replays the event; deterministic event IDs make the writes idempotent. Invalid records are copied to the DLQ.
+
+## Continuous stream
 
 ```powershell
 python -m src.producer --continuous --duration 75
 ```
 
-Expected: one `throughput` line per second, 15 events per second during the first 10 seconds of each minute and 5 otherwise, then a summary with `peak=15 ev/s`. Run `python -m src.consumer` in another terminal to drain the queue; in the management UI the exchange `buenavista.reservations` shows the publish rate.
+Defaults are 5 events/second, with 15 events/second for the first 10 seconds of each 60-second cycle. These are simulator settings, not measured production traffic.
 
-## Troubleshooting
+## Inspect topics
 
-- **Connection refused:** run `docker compose ps` and `docker compose logs rabbitmq`; check port 5672.
-- **Authentication failure:** confirm local `RABBITMQ_USER` and `RABBITMQ_PASSWORD` match the container settings. If changing defaults after the RabbitMQ volume has already been initialized, recreating the container alone may not reset credentials.
-- **Queue has zero ready messages:** confirm the publish logs; a consumer may already have received messages.
-- **Duplicate processing:** use `event_id` as the downstream idempotency key.
-- **Messages repeatedly fail:** define bounded retries and a dead-letter queue before production.
+```powershell
+docker compose exec kafka kafka-topics --bootstrap-server kafka:29092 --list
+docker compose exec kafka kafka-console-consumer --bootstrap-server kafka:29092 --topic buenavista.reservations.v1 --from-beginning --property print.key=true
+```
 
 ## Stop local services
 
@@ -52,10 +63,4 @@ Expected: one `throughput` line per second, 15 events per second during the firs
 docker compose down
 ```
 
-Delete the local RabbitMQ volume as well (this removes local broker state):
-
-```powershell
-docker compose down -v
-```
-
-Do not expose port 5672 or the management UI publicly. Use a secured, approved deployment configuration outside local development.
+Use `docker compose down -v` only when you intentionally want to delete local Kafka state. Production AWS/MSK, TLS/SASL, IAM, retention, partition count, replication, monitoring, and cost sizing require a separate deployment decision.

@@ -5,11 +5,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "buenavista-streaming"
-version = "0.1.0"
-description = "Synthetic F2 channel-manager event producer for HospedaPlus/Buenavista"
+version = "0.2.0"
+description = "Synthetic F2 Kafka event producer and Neon/S3 Bronze ingestion for HospedaPlus"
 requires-python = ">=3.12"
 dependencies = [
-  "pika>=1.3.2,<2",
+  "boto3>=1.35,<2",
+  "confluent-kafka>=2.16,<3",
+  "psycopg[binary]>=3.2,<4",
   "pydantic>=2.8,<3",
   "python-dotenv>=1.0,<2",
 ]

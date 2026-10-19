@@ -1,128 +1,41 @@
-# Buenavista Streaming Ingestion
+# HospedaPlus Buenavista Streaming (F2)
 
-Synthetic streaming source for HospedaPlus/Buenavista. This repository simulates the F2 source (channel-manager events): it generates schema-validated JSON reservation events, continuously and with periodic peaks of at least 10 events per second, and publishes them to RabbitMQ through a durable topic exchange and queue.
+Synthetic F2 channel-manager lifecycle event producer and Kafka ingestion pipeline. This repository demonstrates the proposed event flow; it is not a production deployment.
 
-> **Development status:** synthetic events only. Local publication must be tested before claiming the source is ready. RabbitMQ is selected to align with the project's cost-conscious architecture; no managed Kinesis stream is required for this local implementation.
+## Flow
 
-## Architecture
-
-```text
-Synthetic F2 event generator
-        |
-        v
-Pydantic event validation
-        |
-        v
-RabbitMQ topic exchange buenavista.reservations (routing key = event type)
-        |  binding reservation.#
-        v
-RabbitMQ durable queue buenavista.reservation.events
-        |
-        v
-Consumer (next stage)
-        |
-        v
-Approved data destination
+```
+Synthetic F2 source
+  → Kafka topic (key = reservation_id)
+  → consumer group
+       ├─ raw JSON → S3 Bronze (or local Bronze for development)
+       └─ Neon PostgreSQL: streaming.f2_events + streaming.f2_reservations_current
+  → Airflow can later read Bronze into Silver/Gold
 ```
 
-RabbitMQ is already part of the wider project architecture for asynchronous workloads. The team should confirm the queue and consumer integration points against the final architecture diagram. Airflow/Celery task messages and business reservation events should use clearly separated queues and routing conventions.
+Kafka is the only message broker. F2's event tables are isolated in the additive `streaming` schema and do not replace or write to Melissa's F3 `reservations` tables. The canonical shared catalog is maintained by [db_simulated](https://github.com/HospedaPlus/db_simulated/tree/main/catalog); this repo's hotel ID file is a pinned copy, not an independent catalog.
 
-## Event types
+## Event simulator
 
-| Event type | Meaning |
-|---|---|
-| `reservation.created` | Reservation created |
-| `reservation.updated` | Reservation modified (dates, room type or guests); a reservation can have several |
-| `reservation.cancelled` | Reservation cancelled; about 30% of cancellations are late (< 24 h before arrival) |
-| `reservation.no_show` | Guest did not arrive |
-| `reservation.checked_in` | Guest checked in |
-| `reservation.checked_out` | Guest checked out |
+Generates synthetic events for the existing 28-hotel catalog, including created, updated, cancelled, no-show, checked-in, and checked-out lifecycle events. The v1.1 contract includes no direct guest identifiers. The simulator defaults to a 37% cancellation outcome and can produce intentionally out-of-order lifecycle events; a consumer must reconcile with `reservation_version`.
 
-Each synthetic reservation follows a full lifecycle: creation, zero to three modifications, then one outcome (cancellation about 37% as in the business context, no-show about 5%, otherwise check-in and check-out). Reservations of all 28 hotels are interleaved in simulated chronological order. By default 5% of events are delivered out of order (for example a modification before its creation); `reservation_version` lets consumers put them back in order.
+## Quick start
 
-Events include a versioned envelope, simulated UTC occurrence time, hotel ID from the shared 28-hotel catalog, synthetic reservation ID, sales channel, refundable flag, and minimal reservation facts. Direct guest identifiers and payment details are excluded. See [docs/event-contract.md](docs/event-contract.md).
+See [the Kafka runbook](docs/runbook.md). Start the local KRaft broker, create the main and DLQ topics, configure a disposable PostgreSQL database, apply [the additive F2 schema](sql/streaming_schema.sql), then run the producer and consumer.
 
-## Running the stream
+- `python -m src.producer --count 20 --seed 42`
+- `python -m src.consumer`
 
-```powershell
-# Continuous stream: 5 ev/s base, 15 ev/s peak for 10 s every 60 s, until Ctrl+C
-python -m src.producer --continuous
+The local broker has no authentication and is for development only. A local Bronze directory is used when `BRONZE_S3_BUCKET` is empty. Configure the approved Neon URL and AWS credentials through environment configuration for the intended destinations.
 
-# Same, limited to 75 seconds (covers two peaks)
-python -m src.producer --continuous --duration 75
+## Delivery and recovery
 
-# Batch mode (original behaviour): publish 20 events as fast as possible and stop
-python -m src.producer --count 20 --seed 42
+The producer uses Kafka acknowledgements and idempotence. Consumer offsets are committed after Bronze and Neon writes; the sinks are idempotent by `event_id`, while the current projection accepts only a higher `reservation_version`. Invalid records are routed to a DLQ topic. Kafka-to-Neon/S3 is at-least-once across systems, not a distributed exactly-once transaction.
 
-# In another terminal: consume and validate
-python -m src.consumer
-```
+## Database safety
 
-Continuous mode logs the confirmed events of every second and ends with a summary such as `total=575 elapsed=75.1s average=7.7 ev/s peak=15 ev/s`. Options: `--rate`, `--peak-rate`, `--peak-every` (0 disables peaks), `--peak-duration`, `--duration`, `--count`, `--seed`, `--out-of-order-rate`, `--verbose` (log every event).
+`sql/streaming_schema.sql` only creates F2-owned objects under `streaming`. It is a proposed migration; have the database owner review and apply it. No production database access or migration is performed by this repository change. Never run the F3 seed/reset workflow against shared Neon.
 
-Measured locally against the Compose RabbitMQ with publisher confirms: the default profile sustained exactly 15 ev/s during peaks and 5 ev/s otherwise, and the producer reached about 950 ev/s in batch mode, so the ≥ 10 ev/s peak has wide headroom.
+## Scope limits
 
-## Requirements
-
-- Python 3.12+
-- Docker Desktop with Docker Compose v2
-- Git
-
-## Quick start — Windows PowerShell
-
-```powershell
-git clone https://github.com/HospedaPlus/buenavista-streaming.git
-cd buenavista-streaming
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
-Copy-Item .env.example .env
-docker compose up -d rabbitmq
-docker compose ps
-ruff check .
-ruff format --check .
-pytest
-python -m src.producer --count 20 --seed 42
-```
-
-macOS/Linux: use `python3.12 -m venv .venv`, `source .venv/bin/activate`, and `cp .env.example .env`.
-
-RabbitMQ AMQP is available at `localhost:5672`; the management UI is at `http://localhost:15672`. Local development defaults use `guest/guest`; do not expose this configuration to a network or reuse it in production.
-
-## Configuration
-
-See `.env.example`:
-- `RABBITMQ_HOST`
-- `RABBITMQ_PORT`
-- `RABBITMQ_USER`
-- `RABBITMQ_PASSWORD`
-- `RABBITMQ_VHOST`
-- `RABBITMQ_QUEUE`
-- `RABBITMQ_EXCHANGE`
-- `RABBITMQ_MAX_RETRIES`, `RABBITMQ_RETRY_DELAY_MS`, `RABBITMQ_DLQ`
-
-The producer and the consumer both declare the durable topic exchange, the durable queue and their binding (idempotent). The producer sends persistent messages, and enables publisher confirms. A broker confirmation means RabbitMQ accepted the message; it does not prove downstream processing or database persistence.
-
-## Quality checks
-
-```powershell
-ruff check .
-ruff format --check .
-pytest
-python -m src.producer --count 20 --seed 42
-```
-
-## Acceptance checklist
-
-- [ ] Confirm the event contract with the data-platform owner.
-- [ ] Pass unit tests and Ruff checks.
-- [ ] Verify RabbitMQ health and local publishing.
-- [x] Implement and test a consumer with acknowledgement, retry, and dead-letter strategy.
-- [x] Emit all six F2 event types continuously with peaks of at least 10 ev/s, including out-of-order events.
-- [ ] Verify idempotent persistence to the approved destination.
-- [ ] Confirm queue naming and separation from Airflow/Celery queues.
-- [ ] Confirm production credentials, network exposure, monitoring, and deployment ownership.
-- [ ] Publish final docs in Docusaurus.
-
-This is not a production deployment. No live reservation system is connected.
+This is an end-to-end demonstrator, not a production-ready system. Production requires approved broker security, AWS IAM, partition/retention sizing, observability, alerting, schema governance, and load/recovery validation. The source repository provides no credentials or AWS account details, so those are supplied at deployment time.
