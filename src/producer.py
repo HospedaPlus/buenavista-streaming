@@ -47,7 +47,7 @@ def publish_events(count: int | None = 20, seed: int = 42,
     failures: list[str] = []
     producer = Producer({
         "bootstrap.servers": settings.bootstrap_servers,
-        "security.protocol": settings.security_protocol,
+        **settings.kafka_security_config(),
         "client.id": "hospedaplus-f2-producer",
         "acks": "all",
         "enable.idempotence": True,
