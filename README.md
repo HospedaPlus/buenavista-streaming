@@ -120,4 +120,7 @@ Keep this repository’s event contract and architecture aligned with the tech l
 
 <sub>Proposed architecture and project targets are not production guarantees. AWS costs must be validated in the AWS Pricing Calculator.</sub>
 
+**README author:** Johana Bolivar  
+**Project:** HospedaPlus
+
 </div>
