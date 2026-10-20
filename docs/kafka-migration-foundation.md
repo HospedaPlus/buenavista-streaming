@@ -14,7 +14,7 @@ to Neon PostgreSQL and the Amazon S3 Bronze layer.
 db_simulated seed ─┐
                    ├─> producers + Pydantic validation ─> Kafka
 Project APIs ──────┘                                  │
-                                      topic: reservation.events
+                                      topic: reservation.events.v1_2
                                                      │
                                ┌─────────────────────┴────────────────────┐
                                v                                          v
@@ -29,7 +29,7 @@ Project APIs ──────┘                                  │
 1. Keep `db_simulated` as the canonical source for hotel, room-type, channel,
    and other seeded catalog values. Do not create a competing catalog in this
    repository.
-2. Start with `reservation.events`. Add hotel, inventory, and rate topics only
+2. Start with `reservation.events.v1_2`. Add hotel, inventory, and rate topics only
    when their event contracts and producers are ready.
 3. Keep Neon and S3 as independent consumer groups so a failure in one sink
    does not directly stop the other.
@@ -58,7 +58,7 @@ docker compose -f docker-compose.kafka.yml ps
 Create the initial topic:
 
 ```powershell
-docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic reservation.events --partitions 3 --replication-factor 1
+docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic reservation.events.v1_2 --partitions 3 --replication-factor 1
 ```
 
 Inspect topics:
