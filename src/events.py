@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Literal
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Literal values restrict event types to the lifecycle operations F2 requires.
 EventType = Literal[
@@ -131,8 +131,18 @@ class ReservationPayload(BaseModel):
         """Reject a checkout date that is not later than check-in."""
         check_in = info.data.get("check_in")
         if check_in and value <= check_in:
-            raise ValueError("check_out must be later than check_in")
+            raise ValueError("check_out must be later than check-in")
         return value
+
+    @model_validator(mode="after")
+    def guests_fit_room_capacity(self):
+        """Reject guest counts that exceed the canonical room-type capacity."""
+        capacity = ROOM_TYPES[self.room_type]["max_guests"]
+        if self.guests > capacity:
+            raise ValueError(
+                f"{self.room_type} supports at most {capacity} guest(s); got {self.guests}"
+            )
+        return self
 
 
 class ReservationEvent(BaseModel):
