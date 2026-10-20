@@ -45,7 +45,7 @@ def publish_events(
         raise ValueError("count must be at least 1")
 
     broker = bootstrap_servers or os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
-    target_topic = topic or os.getenv("KAFKA_RESERVATION_TOPIC", "reservation.events")
+    target_topic = topic or os.getenv("KAFKA_RESERVATION_TOPIC", "reservation.events.v1_2")
     producer = Producer({"bootstrap.servers": broker, "client.id": "buenavista-seed-producer"})
     sent = 0
     delivery_errors: list[str] = []
