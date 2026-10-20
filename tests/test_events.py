@@ -72,6 +72,22 @@ def take(count, **kwargs):
     return list(islice(generate_events(**kwargs), count))
 
 
+def test_payload_rejects_guests_over_room_capacity():
+    """Payload validation must enforce canonical room capacities."""
+    with pytest.raises(ValidationError, match="supports at most"):
+        ReservationPayload(
+            check_in="2026-11-02",
+            check_out="2026-11-04",
+            room_type="SINGLE",
+            guests=2,
+            total_amount=100,
+            currency="COP",
+            status="confirmed",
+            channel_code="expedia",
+            refundable=True,
+        )
+
+
 def test_stream_covers_all_f2_event_types():
     """F2 requires created, modified, cancelled, no-show, check-in and check-out events."""
     seen = {event.event_type for event in take(3000)}
