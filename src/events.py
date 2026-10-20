@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Literal
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Literal values restrict event types to the lifecycle operations F2 requires.
 EventType = Literal[
@@ -51,13 +51,20 @@ STATUS_BY_EVENT_TYPE: dict[str, str] = {
 }
 
 # Sales channels used by the commission (RN-02) and cancellation (RN-07) rules.
-Channel = Literal["ota", "direct", "agency", "corporate"]
+ChannelCode = Literal["booking_channel_a", "booking_channel_b", "expedia", "direct_ota"]
 
-SCHEMA_VERSION = "1.1"
+SCHEMA_VERSION = "1.2"
 
 # Reuse the project's shared hotel identifier set to avoid generating unknown hotels.
-CATALOG_PATH = Path(__file__).parent / "catalog" / "hotel_ids.json"
-HOTEL_IDS = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+CATALOG_PATH = Path(__file__).resolve().parents[1] / "catalog" / "catalog.json"
+CATALOG = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+HOTELS = CATALOG["hotels"]
+HOTEL_BY_CODE = {hotel["code"]: hotel for hotel in HOTELS}
+HOTEL_IDS = tuple(HOTEL_BY_CODE)
+ROOM_TYPES = {item["code"]: item for item in CATALOG["room_types"]}
+# F2 owns OTA integrations. F3 direct/corporate and F4 agencies are not emitted by F2.
+F2_CHANNELS = tuple(channel for channel in CATALOG["channels"] if channel["source"] == "F2")
+F2_CHANNEL_CODES = tuple(channel["code"] for channel in F2_CHANNELS)
 
 # Simulated clock origin. occurred_at values are simulated business time, which
 # advances much faster than wall-clock time so a short run covers whole stays.
@@ -69,13 +76,20 @@ DEFAULT_OUT_OF_ORDER_RATE = 0.05
 # Mean simulated minutes between two new bookings across the whole chain.
 MEAN_MINUTES_BETWEEN_BOOKINGS = 20
 
-CURRENCY_BY_COUNTRY = {"CO": "COP", "PT": "EUR", "ES": "EUR", "BR": "BRL", "MX": "MXN"}
-# Approximate nightly base rate per currency, so amounts are plausible per country.
-NIGHTLY_BASE_RATE = {"COP": 250_000, "EUR": 110, "BRL": 450, "MXN": 1_800}
-ROOM_TYPES = {"standard": 1.0, "deluxe": 1.4, "suite": 2.2}
-
-CHANNEL_WEIGHTS = {"ota": 0.50, "direct": 0.25, "agency": 0.15, "corporate": 0.10}
-REFUNDABLE_SHARE = {"ota": 0.70, "direct": 0.80, "agency": 0.90, "corporate": 1.0}
+# Synthetic nightly rates by canonical room type and hotel currency; not production pricing.
+NIGHTLY_BASE_RATE = {
+    "COP": {"SINGLE": 240_000, "DOUBLE": 320_000, "TWIN": 330_000, "SUITE": 680_000},
+    "EUR": {"SINGLE": 90, "DOUBLE": 120, "TWIN": 125, "SUITE": 260},
+    "BRL": {"SINGLE": 380, "DOUBLE": 500, "TWIN": 520, "SUITE": 1_050},
+    "MXN": {"SINGLE": 1_300, "DOUBLE": 1_700, "TWIN": 1_750, "SUITE": 3_600},
+}
+F2_CHANNEL_WEIGHTS = {
+    "booking_channel_a": 0.30,
+    "booking_channel_b": 0.25,
+    "expedia": 0.30,
+    "direct_ota": 0.15,
+}
+REFUNDABLE_SHARE = 0.70
 
 # Outcome shares. The 37% cancellation rate comes from the business context.
 CANCELLATION_RATE = 0.37
@@ -103,12 +117,12 @@ class ReservationPayload(BaseModel):
     check_out: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
 
     # Bound text length and numeric ranges to reject clearly invalid sample data.
-    room_type: str = Field(min_length=1, max_length=80)
+    room_type: Literal["SINGLE", "DOUBLE", "TWIN", "SUITE"]
     guests: int = Field(ge=1, le=20)
     total_amount: float = Field(ge=0)
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     status: ReservationStatus
-    channel: Channel
+    channel_code: ChannelCode
     refundable: bool
 
     @field_validator("check_out")
@@ -117,8 +131,18 @@ class ReservationPayload(BaseModel):
         """Reject a checkout date that is not later than check-in."""
         check_in = info.data.get("check_in")
         if check_in and value <= check_in:
-            raise ValueError("check_out must be later than check_in")
+            raise ValueError("check_out must be later than check-in")
         return value
+
+    @model_validator(mode="after")
+    def guests_fit_room_capacity(self):
+        """Reject guest counts that exceed the canonical room-type capacity."""
+        capacity = ROOM_TYPES[self.room_type]["max_guests"]
+        if self.guests > capacity:
+            raise ValueError(
+                f"{self.room_type} supports at most {capacity} guest(s); got {self.guests}"
+            )
+        return self
 
 
 class ReservationEvent(BaseModel):
@@ -127,7 +151,7 @@ class ReservationEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     event_id: UUID
-    schema_version: Literal["1.1"]
+    schema_version: Literal["1.2"]
     source: Literal["f2-channel-manager"]
     event_type: EventType
     occurred_at: datetime
@@ -163,12 +187,13 @@ def build_reservation_events(seed: int, number: int, booked_at: datetime) -> lis
     The same seed and reservation number always yield the same events.
     """
     rng = random.Random(f"{seed}:{number}")
-    hotel_id = HOTEL_IDS[number % len(HOTEL_IDS)]
-    currency = CURRENCY_BY_COUNTRY[hotel_id.split("-")[1]]
+    hotel = HOTELS[number % len(HOTELS)]
+    hotel_id = hotel["code"]
+    currency = hotel["currency"]
     reservation_id = f"F2-RES-{seed:04d}-{number:08d}"
 
-    channel = _weighted_choice(rng, CHANNEL_WEIGHTS)
-    refundable = channel == "corporate" or rng.random() < REFUNDABLE_SHARE[channel]
+    channel_code = _weighted_choice(rng, F2_CHANNEL_WEIGHTS)
+    refundable = rng.random() < REFUNDABLE_SHARE
 
     # Most bookings are made a few days ahead; a few are made weeks ahead.
     lead_days = min(int(rng.expovariate(1 / 6)), 60)
@@ -177,10 +202,10 @@ def build_reservation_events(seed: int, number: int, booked_at: datetime) -> lis
         check_in += timedelta(days=1)
     arrival = _at(check_in, CHECK_IN_TIME)
 
-    room_type = rng.choice(list(ROOM_TYPES))
+    room_type = rng.choice(tuple(ROOM_TYPES))
     nights = rng.randint(1, 5)
-    guests = rng.randint(1, 4)
-    nightly = NIGHTLY_BASE_RATE[currency] * ROOM_TYPES[room_type] * rng.uniform(0.8, 1.3)
+    guests = rng.randint(1, ROOM_TYPES[room_type]["max_guests"])
+    nightly = NIGHTLY_BASE_RATE[currency][room_type] * rng.uniform(0.8, 1.3)
 
     def snapshot(status: str) -> dict:
         return {
@@ -191,7 +216,7 @@ def build_reservation_events(seed: int, number: int, booked_at: datetime) -> lis
             "total_amount": round(nightly * nights, 2),
             "currency": currency,
             "status": status,
-            "channel": channel,
+            "channel_code": channel_code,
             "refundable": refundable,
         }
 
@@ -223,9 +248,10 @@ def build_reservation_events(seed: int, number: int, booked_at: datetime) -> lis
             nights = max(1, nights + rng.choice((-1, 1)))
         elif change == "room_type":
             room_type = rng.choice([r for r in ROOM_TYPES if r != room_type])
-            nightly = NIGHTLY_BASE_RATE[currency] * ROOM_TYPES[room_type] * rng.uniform(0.8, 1.3)
+            nightly = NIGHTLY_BASE_RATE[currency][room_type] * rng.uniform(0.8, 1.3)
         else:
-            guests = max(1, min(6, guests + rng.choice((-1, 1))))
+            guests = max(1, min(ROOM_TYPES[room_type]["max_guests"], guests + rng.choice((-1, 1))))
+        guests = min(guests, ROOM_TYPES[room_type]["max_guests"])
         steps.append(("reservation.updated", booked_at + window * offset, snapshot("modified")))
 
     if cancelled_at is not None:
