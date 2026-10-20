@@ -9,10 +9,11 @@ from pydantic import ValidationError
 
 from src.events import (
     EVENT_TYPES,
-    HOTEL_IDS,
     CATALOG,
-    ROOM_TYPES,
+    EVENT_TYPES,
     F2_CHANNEL_CODES,
+    HOTEL_IDS,
+    ROOM_TYPES,
     STATUS_BY_EVENT_TYPE,
     ReservationEvent,
     ReservationPayload,
@@ -57,7 +58,7 @@ def test_checkout_must_be_after_checkin():
         ReservationPayload(
             check_in="2026-11-02",
             check_out="2026-11-01",
-            room_type="standard",
+            room_type="SINGLE",
             guests=2,
             total_amount=100,
             currency="COP",
@@ -165,7 +166,6 @@ def test_cancellation_rate_is_close_to_business_context():
 def test_invalid_out_of_order_rate_is_rejected():
     with pytest.raises(ValueError):
         next(generate_events(out_of_order_rate=1.5))
-
 
 
 def test_event_catalog_codes_match_shared_catalog():
