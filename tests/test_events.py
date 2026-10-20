@@ -10,6 +10,9 @@ from pydantic import ValidationError
 from src.events import (
     EVENT_TYPES,
     HOTEL_IDS,
+    CATALOG,
+    ROOM_TYPES,
+    F2_CHANNEL_CODES,
     STATUS_BY_EVENT_TYPE,
     ReservationEvent,
     ReservationPayload,
@@ -24,7 +27,7 @@ def test_event_is_valid_and_uses_utc():
     assert isinstance(event, ReservationEvent)
     assert event.occurred_at.tzinfo is not None
     assert event.source == "f2-channel-manager"
-    assert event.schema_version == "1.1"
+    assert event.schema_version == "1.2"
 
 
 def test_same_seed_and_index_produce_same_event():
@@ -59,7 +62,7 @@ def test_checkout_must_be_after_checkin():
             total_amount=100,
             currency="COP",
             status="confirmed",
-            channel="ota",
+            channel_code="expedia",
             refundable=True,
         )
 
@@ -162,3 +165,27 @@ def test_cancellation_rate_is_close_to_business_context():
 def test_invalid_out_of_order_rate_is_rejected():
     with pytest.raises(ValueError):
         next(generate_events(out_of_order_rate=1.5))
+
+
+
+def test_event_catalog_codes_match_shared_catalog():
+    """Generated identifiers and dimensions must use canonical catalog values."""
+    assert len(HOTEL_IDS) == 28
+    assert set(HOTEL_IDS) == {hotel["code"] for hotel in CATALOG["hotels"]}
+    assert set(ROOM_TYPES) == {room["code"] for room in CATALOG["room_types"]}
+    assert set(F2_CHANNEL_CODES) == {
+        channel["code"] for channel in CATALOG["channels"] if channel["source"] == "F2"
+    }
+
+
+def test_generated_dimensions_are_canonical_and_capacity_valid():
+    """Generated room types, currencies, channels and guest counts must match catalog."""
+    hotels = {hotel["code"]: hotel for hotel in CATALOG["hotels"]}
+    channels = {channel["code"]: channel for channel in CATALOG["channels"]}
+    for event in take(500):
+        payload = event.data
+        assert payload.room_type in ROOM_TYPES
+        assert payload.channel_code in F2_CHANNEL_CODES
+        assert payload.currency == hotels[event.hotel_id]["currency"]
+        assert payload.guests <= ROOM_TYPES[payload.room_type]["max_guests"]
+        assert channels[payload.channel_code]["source"] == "F2"
