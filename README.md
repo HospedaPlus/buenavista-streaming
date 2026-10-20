@@ -126,3 +126,64 @@ python -m src.producer --count 20 --seed 42
 - [ ] Publish final docs in Docusaurus.
 
 This is not a production deployment. No live reservation system is connected.
+
+
+## Kafka migration (in progress)
+
+Kafka is being introduced alongside RabbitMQ so the migration can be validated
+without deleting the existing broker, volume, queues, or pending messages.
+
+### Start the local Kafka broker
+
+```powershell
+docker compose -f docker-compose.kafka.yml config
+docker compose -f docker-compose.kafka.yml up -d
+docker compose -f docker-compose.kafka.yml ps
+```
+
+Create the initial reservation topic:
+
+```powershell
+docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic reservation.events --partitions 3 --replication-factor 1
+```
+
+Install the Kafka client dependency after pulling the migration branch:
+
+```powershell
+python -m pip install -e ".[dev]"
+```
+
+Publish a small, bounded batch of synthetic events:
+
+```powershell
+python -m src.kafka_producer --count 20 --seed 42
+```
+
+In a second terminal, run the validation consumer:
+
+```powershell
+python -m src.kafka_consumer
+```
+
+The Kafka producer uses `reservation_id` as the message key. The validation
+consumer disables automatic offset commits and commits each offset only after
+the event passes schema validation and the current logging processor completes.
+Invalid messages stop the consumer without committing that message; a dedicated
+dead-letter topic is still required before production use.
+
+### Current migration status
+
+- [x] Add an isolated local Kafka broker configuration.
+- [x] Add a Kafka producer using the existing Pydantic event contract.
+- [x] Add a Kafka validation consumer with manual offset commits.
+- [x] Add the Kafka Python client dependency.
+- [ ] Run Ruff, unit tests, and broker integration tests on the migration branch.
+- [ ] Align the event catalog with `HospedaPlus/db_simulated`.
+- [ ] Implement independent, idempotent Neon and S3 Bronze sink consumers.
+- [ ] Add retry and dead-letter handling for invalid or repeatedly failing events.
+- [ ] Confirm operational requirements before removing RabbitMQ.
+
+**This migration is not yet complete or production-ready.** Neon and S3 persistence
+are not implemented in the Kafka path, the catalog contract has not yet been
+aligned, and the new Kafka code has not yet been runtime-tested. The existing
+RabbitMQ implementation remains available during the transition.
