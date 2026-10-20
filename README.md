@@ -16,7 +16,7 @@ Pydantic event validation
 RabbitMQ topic exchange buenavista.reservations (routing key = event type)
         |  binding reservation.#
         v
-RabbitMQ durable queue buenavista.reservation.events
+RabbitMQ durable queue buenavista.reservation.events.v1_2
         |
         v
 Consumer (next stage)
@@ -144,7 +144,7 @@ docker compose -f docker-compose.kafka.yml ps
 Create the initial reservation topic:
 
 ```powershell
-docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic reservation.events --partitions 3 --replication-factor 1
+docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic reservation.events.v1_2 --partitions 3 --replication-factor 1
 ```
 
 Install the Kafka client dependency after pulling the migration branch:
