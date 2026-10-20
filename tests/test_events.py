@@ -8,7 +8,6 @@ import pytest
 from pydantic import ValidationError
 
 from src.events import (
-    EVENT_TYPES,
     CATALOG,
     EVENT_TYPES,
     F2_CHANNEL_CODES,
