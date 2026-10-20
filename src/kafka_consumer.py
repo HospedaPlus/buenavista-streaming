@@ -7,7 +7,6 @@ will be implemented as independent sink consumers in a later migration step.
 import logging
 import os
 import signal
-import sys
 
 from confluent_kafka import Consumer, KafkaError, KafkaException
 from pydantic import ValidationError
@@ -17,6 +16,7 @@ from src.events import ReservationEvent
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 shutdown_requested = False
+POLL_TIMEOUT_SECONDS = 1.0
 
 
 def request_shutdown(signum, frame) -> None:
@@ -42,6 +42,7 @@ def process_event(event: ReservationEvent) -> None:
 def consume_events() -> None:
     """Consume messages and commit offsets only after successful validation."""
     global shutdown_requested
+    shutdown_requested = False
     broker = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
     topic = os.getenv("KAFKA_RESERVATION_TOPIC", "reservation.events")
     group_id = os.getenv("KAFKA_GROUP_ID", "buenavista-validation-consumer")
@@ -60,7 +61,7 @@ def consume_events() -> None:
 
     try:
         while not shutdown_requested:
-            message = consumer.poll(1.0)
+            message = consumer.poll(POLL_TIMEOUT_SECONDS)
             if message is None:
                 continue
             if message.error():
