@@ -1,7 +1,7 @@
-"""Publish validated reservation events to Apache Kafka.
+"""Publish validated synthetic reservation events to Apache Kafka.
 
-This is the Kafka migration path. The existing RabbitMQ producer remains
-available until the Kafka path has been tested and approved.
+Kafka is the sole supported broker in the current repository. The producer
+validates each event before publishing and checks broker delivery outcomes.
 """
 
 import argparse
