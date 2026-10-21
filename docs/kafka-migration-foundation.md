@@ -1,18 +1,14 @@
-# Kafka migration foundation
+# Kafka streaming foundation
 
 ## Goal
 
-Move Buenavista's business-event transport from RabbitMQ to Apache Kafka. Events
-must originate from the canonical HospedaPlus simulated data in
-[`HospedaPlus/db_simulated`](https://github.com/HospedaPlus/db_simulated), and
-later from project APIs. Independent consumers will deliver applicable events
-to Neon PostgreSQL and the Amazon S3 Bronze layer.
+Buenavista Streaming uses Apache Kafka as its only supported message broker. Events originate from the canonical HospedaPlus simulated data in [`HospedaPlus/db_simulated`](https://github.com/HospedaPlus/db_simulated), with future event sources provided by approved project APIs. Independent consumer groups are intended to deliver applicable events to Neon PostgreSQL and the Amazon S3 Bronze layer.
 
 ## Target architecture
 
 ```text
 db_simulated seed ─┐
-                   ├─> producers + Pydantic validation ─> Kafka
+                   ├─> producer + Pydantic validation ─> Apache Kafka
 Project APIs ──────┘                                  │
                                       topic: reservation.events.v1_2
                                                      │
@@ -24,29 +20,19 @@ Project APIs ──────┘                                  │
                      Neon PostgreSQL                              Amazon S3 / bronze
 ```
 
-## Scope and migration rules
+## Design rules
 
-1. Keep `db_simulated` as the canonical source for hotel, room-type, channel,
-   and other seeded catalog values. Do not create a competing catalog in this
-   repository.
-2. Start with `reservation.events.v1_2`. Add hotel, inventory, and rate topics only
-   when their event contracts and producers are ready.
-3. Keep Neon and S3 as independent consumer groups so a failure in one sink
-   does not directly stop the other.
-4. Design consumers for at-least-once delivery, idempotent writes, bounded
-   retries, and recoverable failures. Do not claim exactly-once writes across
-   Kafka, Neon, and S3.
+1. Keep `db_simulated` as the canonical source for hotel, room-type, channel, and other seeded catalog values.
+2. Start with `reservation.events.v1_2`. Add other topics only when their event contracts and producers are ready.
+3. Keep Neon and S3 as independent consumer groups so a failure in one sink does not directly stop the other.
+4. Design consumers for at-least-once delivery, idempotent writes, bounded retries, and recoverable failures. Do not claim exactly-once writes across multiple systems.
 5. Commit consumer offsets only after the corresponding sink write succeeds.
-6. Do not blindly write all event types to the operational `reservations`
-   table. Map event types to the existing database schema and business rules.
-7. Preserve the existing RabbitMQ compose file, volume, queues, and pending
-   messages while the Kafka path is developed and validated.
+6. Do not blindly write all event types to the operational `reservations` table. Map event types to the existing database schema and business rules.
+7. Keep the local single-node broker configuration limited to development and demonstrations.
 
 ## Local Kafka broker
 
-A separate `docker-compose.kafka.yml` provides a single-node Kafka KRaft
-broker for development. It is not a production configuration and does not
-replace the existing RabbitMQ setup yet.
+`docker-compose.kafka.yml` provides a single-node Kafka KRaft broker for local development.
 
 Start Kafka:
 
@@ -67,33 +53,28 @@ Inspect topics:
 docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
 ```
 
-Stop only this Kafka service when finished:
+Stop Kafka:
 
 ```powershell
 docker compose -f docker-compose.kafka.yml down
 ```
 
-The named `kafka_data` volume is intentionally retained by this command. Do not
-add `-v` unless deleting local Kafka data is explicitly intended.
+The named `kafka_data` volume is retained by this command. Do not add `-v` unless deleting local Kafka data is explicitly intended.
 
-## Implementation sequence
+## Implementation status
 
-- [x] Create an isolated local Kafka broker configuration.
-- [x] Document the target architecture and migration safeguards.
-- [ ] Add Kafka client dependency and configuration.
-- [ ] Implement a Kafka producer using the current validated event contract.
-- [ ] Implement and test a Kafka consumer with explicit offset management.
-- [ ] Align hotel IDs, room types, currencies, and channels with `db_simulated`.
-- [ ] Add isolated integration tests for publication and consumption.
-- [ ] Implement an idempotent Neon consumer.
-- [ ] Implement a durable S3 Bronze consumer with ingestion metadata.
-- [ ] Document deployment and evidence; decide whether RabbitMQ remains needed
-      elsewhere before removing it.
+- [x] Local Kafka KRaft broker configuration.
+- [x] Versioned reservation event contract.
+- [x] Kafka producer and schema-validation consumer.
+- [x] Automated producer and consumer unit tests.
+- [x] Isolated Neon event-ledger sink and consumer.
+- [ ] Kafka broker integration tests from a clean environment.
+- [ ] Review and apply the Neon event-ledger migration through the approved process.
+- [ ] Verify live Neon persistence with integration tests.
+- [ ] Implement and test S3 Bronze persistence.
+- [ ] Implement bounded retries and a dead-letter workflow.
+- [ ] Validate catalog compatibility, replay, idempotency, and offset behavior end to end.
 
-## Important limitations
+## Limitations
 
-The current RabbitMQ producer/consumer code is not converted by adding this
-broker file alone. The Kafka producer, consumer, tests, Neon persistence, and S3
-persistence remain follow-up implementation tasks. This local KRaft broker uses
-one node and replication factor 1, so it is for development and demonstrations,
-not production availability.
+The local broker uses one node and replication factor one, so it is not suitable for production high availability. Neon integration must not be considered operational until the migration and connection are verified. S3 persistence, production failure recovery, and cloud deployment remain pending.
