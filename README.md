@@ -242,3 +242,70 @@ Production readiness requires passing automated checks, an agreed event contract
   <strong>🏨 Buenavista Streaming · HospedaPlus</strong><br/>
   <sub>Thoughtful data engineering for dependable hospitality experiences.</sub>
 </p>
+
+
+## End-to-end FastAPI → Kafka → Neon flow
+
+The local stack now includes a FastAPI ingress, an Apache Kafka broker, and a dedicated Neon event-ledger consumer. The seed generator can send its synthetic lifecycle events through the API so it exercises the same ingress path as an upstream caller.
+
+```mermaid
+flowchart LR
+    A["Synthetic seed generator"] -->|POST /events| B["FastAPI"]
+    C["Upstream reservation client"] -->|POST /reservations| B
+    B -->|validated JSON event| D["Kafka: reservation.events.v1_2"]
+    D --> E["Neon consumer"]
+    E --> F["public.reservation_event_ledger"]
+```
+
+### Start locally
+
+1. Create a local `.env` from `.env.example`. Keep the real Neon URL private; do not commit it.
+2. In Neon, use the approved **development** branch for initial integration. Apply `migrations/001_create_reservation_event_ledger.sql` there first. Do not point this stack at the production branch until the owner approves the migration and test-data policy.
+3. Start the services:
+
+   ```bash
+   docker compose --env-file .env -f docker-compose.kafka.yml up --build -d
+   ```
+
+4. Confirm the API process is running:
+
+   ```bash
+   curl http://localhost:8000/health
+   ```
+
+5. Send 100 synthetic events through FastAPI:
+
+   ```bash
+   python -m src.seed_to_api --count 100 --seed 42 --api-url http://localhost:8000
+   ```
+
+6. Inspect logs for Kafka delivery and Neon persistence:
+
+   ```bash
+   docker compose --env-file .env -f docker-compose.kafka.yml logs -f api neon-consumer
+   ```
+
+7. Stop the stack when finished:
+
+   ```bash
+   docker compose --env-file .env -f docker-compose.kafka.yml down
+   ```
+
+Host-based tools connect to Kafka through `localhost:29092`; containers connect through `kafka:9092`. The API returns HTTP 202 only after Kafka confirms delivery. That response does **not** mean Neon persistence has completed; verify the consumer logs and ledger rows separately.
+
+### API contract
+
+- `GET /health`: process health only; it does not assert Kafka or Neon availability.
+- `POST /events`: validates and publishes a complete version-1.2 event, intended for the synthetic seed generator and event-aware clients.
+- `POST /reservations`: accepts a new reservation payload, constructs a `reservation.created` event at version 1, and publishes it.
+
+The Neon sink writes only to the additive `public.reservation_event_ledger` table. It does not update F3 operational reservation tables. The API currently has no authentication, authorization, rate limiting, or production TLS configuration; deploy it only in a controlled environment until those controls are added. The current consumer stops on invalid messages; production dead-letter and retry handling remains a release blocker.
+
+### Automated checks
+
+```bash
+python -m pip install -e ".[dev]"
+ruff check .
+ruff format --check .
+pytest
+```
