@@ -17,9 +17,7 @@ def stub_signal_handlers(monkeypatch):
     neon_consumer.shutdown_requested = False
 
 
-def test_offset_is_committed_only_after_neon_persistence(
-    monkeypatch, stub_signal_handlers
-):
+def test_offset_is_committed_only_after_neon_persistence(monkeypatch, stub_signal_handlers):
     """A successful database write must precede the Kafka offset commit."""
     event = build_event(index=0, seed=42)
     message = MagicMock()
@@ -49,9 +47,7 @@ def test_offset_is_committed_only_after_neon_persistence(
     consumer.commit.assert_called_once_with(message=message, asynchronous=False)
 
 
-def test_failed_neon_persistence_does_not_commit_offset(
-    monkeypatch, stub_signal_handlers
-):
+def test_failed_neon_persistence_does_not_commit_offset(monkeypatch, stub_signal_handlers):
     """Database failures leave the message offset available for replay."""
     event = build_event(index=0, seed=42)
     message = MagicMock()
