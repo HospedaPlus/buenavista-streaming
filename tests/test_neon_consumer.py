@@ -1,4 +1,4 @@
-""""Tests for Neon consumer offset ordering and safe shutdown."""
+"""Tests for Neon consumer offset ordering and safe shutdown."""
 
 from unittest.mock import MagicMock
 
