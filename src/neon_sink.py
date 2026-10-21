@@ -25,9 +25,7 @@ class NeonEventSink:
         """Use an explicit connection URL or the NEON_DATABASE_URL environment variable."""
         self.database_url = database_url or os.getenv("NEON_DATABASE_URL")
         if not self.database_url:
-            raise ValueError(
-                "NEON_DATABASE_URL must be configured in the environment or .env file"
-            )
+            raise ValueError("NEON_DATABASE_URL must be configured in the environment or .env file")
 
     def persist(
         self,
