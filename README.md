@@ -1,74 +1,129 @@
-# Buenavista Streaming Ingestion
+# 🏨 Buenavista | Hospitality Streaming Platform
 
-Synthetic streaming source for HospedaPlus/Buenavista. This repository simulates the F2 source (channel-manager events): it generates schema-validated JSON reservation events, continuously and with periodic peaks of at least 10 events per second, and publishes them to RabbitMQ through a durable topic exchange and queue.
+<p align="center">
+  <strong>Reliable reservation events for smarter hospitality operations.</strong><br/>
+  <em>HospedaPlus · Data Engineering · F2 Channel-Manager Simulation</em>
+</p>
 
-> **Development status:** synthetic events only. Local publication must be tested before claiming the source is ready. RabbitMQ is selected to align with the project's cost-conscious architecture; no managed Kinesis stream is required for this local implementation.
+<p align="center">
+  <img alt="Python 3.12+" src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white" />
+  <img alt="Apache Kafka" src="https://img.shields.io/badge/Streaming-Apache%20Kafka-231F20?logo=apachekafka&logoColor=white" />
+  <img alt="PostgreSQL / Neon" src="https://img.shields.io/badge/OLTP-Neon%20%7C%20PostgreSQL-00E699?logo=postgresql&logoColor=white" />
+  <img alt="Amazon S3" src="https://img.shields.io/badge/Lakehouse%20landing-Amazon%20S3-569A31?logo=amazons3&logoColor=white" />
+  <img alt="Docker Compose" src="https://img.shields.io/badge/Local%20environment-Docker%20Compose-2496ED?logo=docker&logoColor=white" />
+</p>
 
-## Architecture
+> [!IMPORTANT]
+> **Current status: active development.** The default branch contains the Kafka producer, versioned reservation-event contract, and a validation consumer. Neon persistence, S3 Bronze persistence, production retry/dead-letter behavior, and cloud deployment must not be considered complete until their migrations, integration tests, and runtime checks have been executed and reviewed. The repository deliberately distinguishes implemented code from planned infrastructure.
 
-```text
-Synthetic F2 event generator
-        |
-        v
-Pydantic event validation
-        |
-        v
-RabbitMQ topic exchange buenavista.reservations (routing key = event type)
-        |  binding reservation.#
-        v
-RabbitMQ durable queue buenavista.reservation.events.v1_2
-        |
-        v
-Consumer (next stage)
-        |
-        v
-Approved data destination
+## ✨ Project overview
+
+Buenavista Streaming is the synthetic **F2 channel-manager event source** for the HospedaPlus data platform. It creates realistic, schema-validated reservation lifecycle events for a simulated hospitality portfolio and publishes them to a streaming broker.
+
+The goal is to provide a repeatable, privacy-conscious source for testing ingestion, event validation, ordering, idempotency, operational projections, and analytics landing patterns—without connecting to a live guest or payment system.
+
+### 🛎️ Hospitality context
+
+| Project dimension | Current definition |
+| --- | --- |
+| Business domain | Hotel reservations and channel-manager activity |
+| Simulated portfolio | 28 hotels across five countries; 4,000 rooms |
+| Source domain | F2 — channel-manager events |
+| Event format | Versioned JSON validated with Pydantic |
+| Current event contract | **1.2** |
+| Canonical reference data | Pinned catalog from `HospedaPlus/db_simulated` |
+| Privacy | Synthetic data only; no direct guest identifiers or payment data |
+| Main branch | `main` |
+
+## 🧭 Architecture at a glance
+
+The target design separates event publication from independent operational and analytical consumers. This keeps a slow or unavailable destination from requiring the producer to write directly to every system.
+
+```mermaid
+flowchart LR
+    A["Synthetic F2 event generator"] --> B["Pydantic validation"]
+    B --> C["Apache Kafka<br/>reservation.events.v1_2"]
+    C --> D["Validation consumer<br/>current main"]
+    C -. "target consumer group" .-> E["Neon PostgreSQL<br/>OLTP event ledger"]
+    C -. "target consumer group" .-> F["Amazon S3<br/>Bronze JSONL"]
+    E --> G["Operational event projection"]
+    F --> H["Analytics / lakehouse pipeline"]
 ```
 
-RabbitMQ is already part of the wider project architecture for asynchronous workloads. The team should confirm the queue and consumer integration points against the final architecture diagram. Airflow/Celery task messages and business reservation events should use clearly separated queues and routing conventions.
+**Solid lines** represent the current implemented validation path. **Dotted lines** represent intended destination integrations; they are not a claim that live persistence or cloud resources are already configured.
 
-## Event types
+### Design principles
 
-| Event type | Meaning |
-|---|---|
-| `reservation.created` | Reservation created |
-| `reservation.updated` | Reservation modified (dates, room type or guests); a reservation can have several |
-| `reservation.cancelled` | Reservation cancelled; about 30% of cancellations are late (< 24 h before arrival) |
-| `reservation.no_show` | Guest did not arrive |
-| `reservation.checked_in` | Guest checked in |
-| `reservation.checked_out` | Guest checked out |
+- **Contract-first events:** validate payloads before they enter downstream processing.
+- **At-least-once-friendly processing:** design consumers to tolerate redelivery and deduplicate by stable event identifiers.
+- **Version-aware ordering:** use `reservation_id` and `reservation_version` to reconcile events that arrive out of order.
+- **Separate responsibilities:** the event producer, OLTP projection, and Bronze capture should be independently deployable.
+- **Safe evolution:** F2 events must not silently rewrite or corrupt F3's operational schema.
+- **Cost-conscious infrastructure:** validate locally before requesting managed cloud resources.
+- **No false deployment claims:** a successful broker acknowledgement is not proof of database or object-store persistence.
 
-Each synthetic reservation follows a full lifecycle: creation, zero to three modifications, then one outcome (cancellation about 37% as in the business context, no-show about 5%, otherwise check-in and check-out). Reservations of all 28 hotels are interleaved in simulated chronological order. By default 5% of events are delivered out of order (for example a modification before its creation); `reservation_version` lets consumers put them back in order.
+## 📨 Event lifecycle
 
-Events include a versioned envelope, simulated UTC occurrence time, hotel ID from the shared 28-hotel catalog, synthetic reservation ID, sales channel, refundable flag, and minimal reservation facts. Direct guest identifiers and payment details are excluded. See [docs/event-contract.md](docs/event-contract.md).
+The simulator supports six reservation event types:
 
-## Running the stream
+| Event type | Hospitality meaning |
+| --- | --- |
+| `reservation.created` | A reservation is created |
+| `reservation.updated` | Reservation details are modified |
+| `reservation.cancelled` | A reservation is cancelled |
+| `reservation.no_show` | The guest does not arrive |
+| `reservation.checked_in` | The guest checks in |
+| `reservation.checked_out` | The guest checks out |
 
-```powershell
-# Continuous stream: 5 ev/s base, 15 ev/s peak for 10 s every 60 s, until Ctrl+C
-python -m src.producer --continuous
+A reservation can include zero to three modifications before its final outcome. Configurable out-of-order delivery helps test consumers that cannot assume creation always arrives before an update. All generated values are test data, not live hotel prices or guest records.
 
-# Same, limited to 75 seconds (covers two peaks)
-python -m src.producer --continuous --duration 75
+### Contract summary
 
-# Batch mode (original behaviour): publish 20 events as fast as possible and stop
-python -m src.producer --count 20 --seed 42
+The authoritative specification is [`docs/event-contract.md`](docs/event-contract.md).
 
-# In another terminal: consume and validate
-python -m src.consumer
-```
+| Field | Purpose |
+| --- | --- |
+| `event_id` | Stable UUID for event-level deduplication |
+| `schema_version` | Contract version; currently `1.2` |
+| `source` | Identifies the F2 channel-manager simulator |
+| `event_type` | One of the six lifecycle events |
+| `occurred_at` | Timezone-aware timestamp normalized to UTC |
+| `hotel_id` | Canonical hotel code |
+| `reservation_id` | Stable synthetic F2 reservation identifier |
+| `reservation_version` | Monotonic lifecycle version for ordering |
+| `data` | Minimal reservation facts and canonical codes |
 
-Continuous mode logs the confirmed events of every second and ends with a summary such as `total=575 elapsed=75.1s average=7.7 ev/s peak=15 ev/s`. Options: `--rate`, `--peak-rate`, `--peak-every` (0 disables peaks), `--peak-duration`, `--duration`, `--count`, `--seed`, `--out-of-order-rate`, `--verbose` (log every event).
+The event's `reservation_id` is **not** the integer primary key of the F3 reservations table. A Neon projection must define an explicit mapping and preserve the original event. Statuses such as `modified`, `checked_in`, and `checked_out` must not be silently translated into an incompatible F3 status.
 
-Measured locally against the Compose RabbitMQ with publisher confirms: the default profile sustained exactly 15 ev/s during peaks and 5 ev/s otherwise, and the producer reached about 950 ev/s in batch mode, so the ≥ 10 ev/s peak has wide headroom.
+## 🧰 Technology stack
 
-## Requirements
+| Technology | Responsibility |
+| --- | --- |
+| Python 3.12+ | Event generation and consumer application |
+| Pydantic 2 | Event schema validation |
+| Apache Kafka / `confluent-kafka` | Streaming producer and consumer client |
+| RabbitMQ / `pika` | Legacy implementation retained during migration |
+| PostgreSQL on Neon | Intended OLTP event ledger and current-state projection |
+| Amazon S3 | Intended raw Bronze landing destination |
+| Docker Compose | Local broker and integration environment |
+| pytest | Automated tests |
+| Ruff | Python linting and formatting |
+| GitHub Actions | CI, when configured and passing for the relevant commit |
 
-- Python 3.12+
-- Docker Desktop with Docker Compose v2
+RabbitMQ is retained during the migration to avoid removing a working legacy path before the Kafka path has been validated. It should not be described as removed until the migration is explicitly accepted and the repository's Compose files, documentation, tests, and operational dependencies agree.
+
+## 🚀 Quick start
+
+### Prerequisites
+
+- Python 3.12 or newer
 - Git
+- Docker Desktop with Docker Compose v2
+- A terminal (PowerShell on Windows, or Bash/Zsh on macOS/Linux)
 
-## Quick start — Windows PowerShell
+### 1. Clone and install
+
+**Windows PowerShell**
 
 ```powershell
 git clone https://github.com/HospedaPlus/buenavista-streaming.git
@@ -78,62 +133,23 @@ py -3.12 -m venv .venv
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 Copy-Item .env.example .env
-docker compose up -d rabbitmq
-docker compose ps
-ruff check .
-ruff format --check .
-pytest
-python -m src.producer --count 20 --seed 42
 ```
 
-macOS/Linux: use `python3.12 -m venv .venv`, `source .venv/bin/activate`, and `cp .env.example .env`.
+**macOS / Linux**
 
-RabbitMQ AMQP is available at `localhost:5672`; the management UI is at `http://localhost:15672`. Local development defaults use `guest/guest`; do not expose this configuration to a network or reuse it in production.
-
-## Configuration
-
-See `.env.example`:
-- `RABBITMQ_HOST`
-- `RABBITMQ_PORT`
-- `RABBITMQ_USER`
-- `RABBITMQ_PASSWORD`
-- `RABBITMQ_VHOST`
-- `RABBITMQ_QUEUE`
-- `RABBITMQ_EXCHANGE`
-- `RABBITMQ_MAX_RETRIES`, `RABBITMQ_RETRY_DELAY_MS`, `RABBITMQ_DLQ`
-
-The producer and the consumer both declare the durable topic exchange, the durable queue and their binding (idempotent). The producer sends persistent messages, and enables publisher confirms. A broker confirmation means RabbitMQ accepted the message; it does not prove downstream processing or database persistence.
-
-## Quality checks
-
-```powershell
-ruff check .
-ruff format --check .
-pytest
-python -m src.producer --count 20 --seed 42
+```bash
+git clone https://github.com/HospedaPlus/buenavista-streaming.git
+cd buenavista-streaming
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+cp .env.example .env
 ```
 
-## Acceptance checklist
+Review `.env.example` and set only the variables needed for the component being tested. Never commit a real password, API key, cloud credential, or connection URI. Keep local `.env` files out of Git.
 
-- [ ] Confirm the event contract with the data-platform owner.
-- [ ] Pass unit tests and Ruff checks.
-- [ ] Verify RabbitMQ health and local publishing.
-- [x] Implement and test a consumer with acknowledgement, retry, and dead-letter strategy.
-- [x] Emit all six F2 event types continuously with peaks of at least 10 ev/s, including out-of-order events.
-- [ ] Verify idempotent persistence to the approved destination.
-- [ ] Confirm queue naming and separation from Airflow/Celery queues.
-- [ ] Confirm production credentials, network exposure, monitoring, and deployment ownership.
-- [ ] Publish final docs in Docusaurus.
-
-This is not a production deployment. No live reservation system is connected.
-
-
-## Kafka migration (in progress)
-
-Kafka is being introduced alongside RabbitMQ so the migration can be validated
-without deleting the existing broker, volume, queues, or pending messages.
-
-### Start the local Kafka broker
+### 2. Start the local Kafka broker
 
 ```powershell
 docker compose -f docker-compose.kafka.yml config
@@ -141,49 +157,146 @@ docker compose -f docker-compose.kafka.yml up -d
 docker compose -f docker-compose.kafka.yml ps
 ```
 
-Create the initial reservation topic:
+Check the broker logs if it does not become healthy:
+
+```powershell
+docker compose -f docker-compose.kafka.yml logs --tail 100
+```
+
+### 3. Create the versioned topic
 
 ```powershell
 docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic reservation.events.v1_2 --partitions 3 --replication-factor 1
 ```
 
-Install the Kafka client dependency after pulling the migration branch:
+The local topic uses a replication factor of one. That is suitable for local development, **not** a high-availability production cluster.
 
-```powershell
-python -m pip install -e ".[dev]"
-```
-
-Publish a small, bounded batch of synthetic events:
+### 4. Publish a bounded test batch
 
 ```powershell
 python -m src.kafka_producer --count 20 --seed 42
 ```
 
-In a second terminal, run the validation consumer:
+The producer uses the reservation identifier as the Kafka message key and reports delivery failures. A successful publish confirms broker acceptance; it does not prove that a downstream sink has stored the event.
+
+### 5. Run the validation consumer
+
+Open a second terminal with the virtual environment activated:
 
 ```powershell
 python -m src.kafka_consumer
 ```
 
-The Kafka producer uses `reservation_id` as the message key. The validation
-consumer disables automatic offset commits and commits each offset only after
-the event passes schema validation and the current logging processor completes.
-Invalid messages stop the consumer without committing that message; a dedicated
-dead-letter topic is still required before production use.
+The current validation consumer parses each message against the Pydantic event model and commits its offset after successful validation and processing. At this stage, its processor logs safe event metadata; it **does not write to Neon or S3**. Invalid messages are left uncommitted and stop the current consumer rather than being silently skipped. A production-ready dead-letter workflow remains a required acceptance item.
 
-### Current migration status
+### 6. Run quality checks
 
-- [x] Add an isolated local Kafka broker configuration.
-- [x] Add a Kafka producer using the existing Pydantic event contract.
-- [x] Add a Kafka validation consumer with manual offset commits.
-- [x] Add the Kafka Python client dependency.
-- [ ] Run Ruff, unit tests, and broker integration tests on the migration branch.
-- [ ] Align the event catalog with `HospedaPlus/db_simulated`.
-- [ ] Implement independent, idempotent Neon and S3 Bronze sink consumers.
-- [ ] Add retry and dead-letter handling for invalid or repeatedly failing events.
-- [ ] Confirm operational requirements before removing RabbitMQ.
+```powershell
+ruff check .
+ruff format --check .
+pytest
+```
 
-**This migration is not yet complete or production-ready.** Neon and S3 persistence
-are not implemented in the Kafka path, the catalog contract has not yet been
-aligned, and the new Kafka code has not yet been runtime-tested. The existing
-RabbitMQ implementation remains available during the transition.
+Run the checks after changing code and record the actual command output in the pull request or release notes. Do not mark a check as passing unless it was executed successfully.
+
+## ⚙️ Configuration
+
+Configuration examples are documented in [`.env.example`](.env.example). The exact variables depend on the component and deployment mode.
+
+| Variable family | Used for |
+| --- | --- |
+| `KAFKA_BOOTSTRAP_SERVERS` | Kafka broker address |
+| `KAFKA_RESERVATION_TOPIC` | Versioned reservation topic |
+| `KAFKA_GROUP_ID` | Validation consumer group |
+| RabbitMQ settings | Legacy producer and consumer |
+| Database connection settings | Future or separately configured Neon sink |
+| S3 / AWS settings | Future or separately configured Bronze sink |
+
+Use placeholders in documentation and examples. Supply credentials through environment variables, a local untracked `.env` file, or the approved deployment secret manager. Do not paste secrets into source code, README files, issue descriptions, screenshots, or logs.
+
+## 🗃️ Neon and S3 integration contract
+
+The intended streaming architecture has two independent sink paths:
+
+1. **Neon OLTP:** persist the immutable event in an inbox/ledger and maintain a monotonic current-state projection in one database transaction. Commit the Kafka offset only after the transaction succeeds.
+2. **S3 Bronze:** preserve raw validated event records in partitioned objects, then commit offsets only after the object write is confirmed.
+
+These are design requirements, not proof of a completed deployment. Before enabling either path, the team must review the additive SQL migration, validate the exact Neon schema and permissions, configure S3 access and partitioning, test replay/idempotency, and prove failure recovery.
+
+### Data integrity rules
+
+- Deduplicate by `event_id`.
+- Do not overwrite a newer reservation state with an older `reservation_version`.
+- Preserve the raw event for audit and replay.
+- Resolve canonical hotel, room, and channel codes against the shared catalog.
+- Do not fabricate guest identity or infer missing financial values.
+- Keep F2's event history separate from F3's operational constraints unless an approved mapping is defined.
+- Do not commit a Kafka offset before the required destination confirms durable persistence.
+
+## 🛡️ Security and privacy
+
+- Only synthetic reservation data belongs in this repository.
+- Do not store guest names, emails, telephone numbers, payment details, or production reservation records in events, tests, or fixtures.
+- Never commit credentials or connection strings.
+- Use least-privilege roles for the broker, database, and object store.
+- Keep local development credentials isolated and never expose development ports to untrusted networks.
+- Redact secrets from logs and error reports.
+- Rotate any credential that may have been exposed; removing it from the latest file alone does not remove it from Git history.
+
+## 🧪 Testing strategy
+
+| Test layer | What it should prove |
+| --- | --- |
+| Unit tests | Event generation, schema validation, ordering metadata, and error handling |
+| Producer tests | Serialization, message keys, delivery callbacks, and failure reporting |
+| Consumer tests | Offset commit ordering, shutdown, malformed events, retry, and dead-letter behavior |
+| Contract tests | Exact catalog codes, allowed event types, and schema-version compatibility |
+| Kafka integration tests | Topic configuration, publish/consume round trip, and restart behavior |
+| Neon integration tests | Transactional inbox/projection, deduplication, rollback, and replay safety |
+| S3 integration tests | Durable object writes, stable partition paths, and offset handling |
+| End-to-end tests | Event generation through every approved destination |
+
+## 📚 Repository guide
+
+| Path | Purpose |
+| --- | --- |
+| `src/events.py` | Event schema, deterministic generation, and lifecycle data |
+| `src/producer.py` | Legacy RabbitMQ publisher |
+| `src/consumer.py` | Legacy RabbitMQ consumer |
+| `src/kafka_producer.py` | Kafka event publisher |
+| `src/kafka_consumer.py` | Kafka validation consumer currently on `main` |
+| `docker-compose.yml` | Legacy/local RabbitMQ environment |
+| `docker-compose.kafka.yml` | Local Kafka environment |
+| `docs/event-contract.md` | Versioned event contract and mapping constraints |
+| `sql/streaming_schema.sql` | Proposed additive schema for streaming-owned data; requires review before applying |
+| `tests/` | Automated test suite |
+| `.env.example` | Configuration template without real credentials |
+
+## 🗺️ Delivery checklist
+
+- [x] Publish the synthetic F2 event contract at version 1.2.
+- [x] Add the Kafka producer and validation consumer to the default branch.
+- [x] Add local Kafka Compose configuration.
+- [ ] Run the full test suite and Ruff checks on the current default-branch commit.
+- [ ] Run Kafka broker integration tests from a clean environment.
+- [ ] Complete and review the Neon schema migration before applying it.
+- [ ] Implement and test the independent Neon sink.
+- [ ] Implement and test S3 Bronze persistence.
+- [ ] Add and verify bounded retries and a dead-letter workflow.
+- [ ] Verify canonical catalog compatibility against the pinned source version.
+- [ ] Validate end-to-end replay, idempotency, and offset behavior.
+- [ ] Confirm security, monitoring, deployment ownership, and budget before production deployment.
+- [ ] Update this checklist only when the corresponding evidence is available.
+
+## 🏁 Definition of done
+
+This repository can be called **production-ready** only when the approved architecture is implemented on `main`, automated checks pass, the event contract is agreed, Neon and S3 persistence are verified with integration tests, credentials are managed securely, failure recovery is demonstrated, and deployment/monitoring ownership is documented.
+
+Until those checks are complete, the project status remains **development**, not production.
+
+---
+
+<p align="center">
+  <strong>🏨 Buenavista Streaming · HospedaPlus</strong><br/>
+  <sub>Thoughtful data engineering for dependable hospitality experiences.</sub>
+</p>
