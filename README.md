@@ -1,7 +1,7 @@
-# 🏨 Hospedaplus | Hospitality Streaming Platform
+# 🏨 HospedaPlus | Hotel Reservation Streaming Platform
 
 <p align="center">
-  <strong>Reliable reservation events for smarter hospitality operations.</strong><br/>
+  <strong>Real-time reservation event processing for the HospedaPlus data platform.</strong><br/>
   <em>HospedaPlus · Data Engineering · F2 Channel-Manager Simulation</em>
 </p>
 
