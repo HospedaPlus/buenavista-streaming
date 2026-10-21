@@ -59,3 +59,21 @@ def test_create_reservation_rejects_invalid_payload():
     )
 
     assert response.status_code == 422
+
+
+def test_seed_event_endpoint_forwards_existing_event(monkeypatch):
+    from src.events import build_event
+
+    event = build_event(index=0, seed=77)
+    published = {}
+
+    def fake_publish(received):
+        published["event"] = received
+        return "reservation.events.v1_2"
+
+    monkeypatch.setattr(api, "publish_to_kafka", fake_publish)
+    response = client.post("/events", json=event.model_dump(mode="json"))
+
+    assert response.status_code == 202
+    assert response.json()["event_id"] == str(event.event_id)
+    assert published["event"].event_id == event.event_id
