@@ -14,17 +14,17 @@
 </p>
 
 > [!IMPORTANT]
-> **Current status: active development.** The default branch contains the Kafka producer, versioned reservation-event contract, and a validation consumer. Neon persistence, S3 Bronze persistence, production retry/dead-letter behavior, and cloud deployment must not be considered complete until their migrations, integration tests, and runtime checks have been executed and reviewed. The repository deliberately distinguishes implemented code from planned infrastructure.
+> **Status: active development.** The default branch contains the Kafka producer, versioned event contract, validation consumer, and an isolated Neon event-ledger sink. Live Neon persistence, S3 persistence, production retry/dead-letter behavior, and cloud deployment must not be considered complete until their migrations, integration tests, and runtime checks have been executed and reviewed.
 
-## ✨ Project overview
+## Project overview
 
-Buenavista Streaming is the synthetic **F2 channel-manager event source** for the HospedaPlus data platform. It creates realistic, schema-validated reservation lifecycle events for a simulated hospitality portfolio and publishes them to a streaming broker.
+Buenavista Streaming is the synthetic **F2 channel-manager event source** for the HospedaPlus data platform. It creates realistic, schema-validated reservation lifecycle events for a simulated hospitality portfolio and publishes them to Apache Kafka.
 
-The goal is to provide a repeatable, privacy-conscious source for testing ingestion, event validation, ordering, idempotency, operational projections, and analytics landing patterns—without connecting to a live guest or payment system.
+The system is Kafka-first. Kafka is the sole message broker supported by this repository; legacy broker implementations and configuration are not part of the maintained application.
 
-### 🛎️ Hospitality context
+### Hospitality context
 
-| Project dimension | Current definition |
+| Dimension | Definition |
 | --- | --- |
 | Business domain | Hotel reservations and channel-manager activity |
 | Simulated portfolio | 28 hotels across five countries; 4,000 rooms |
@@ -35,38 +35,26 @@ The goal is to provide a repeatable, privacy-conscious source for testing ingest
 | Privacy | Synthetic data only; no direct guest identifiers or payment data |
 | Main branch | `main` |
 
-## 🧭 Architecture at a glance
-
-The target design separates event publication from independent operational and analytical consumers. This keeps a slow or unavailable destination from requiring the producer to write directly to every system.
+## Architecture
 
 ```mermaid
 flowchart LR
     A["Synthetic F2 event generator"] --> B["Pydantic validation"]
     B --> C["Apache Kafka<br/>reservation.events.v1_2"]
-    C --> D["Validation consumer<br/>current main"]
-    C -. "target consumer group" .-> E["Neon PostgreSQL<br/>OLTP event ledger"]
-    C -. "target consumer group" .-> F["Amazon S3<br/>Bronze JSONL"]
+    C --> D["Kafka validation consumer"]
+    C -. "independent consumer group" .-> E["Neon PostgreSQL<br/>event ledger"]
+    C -. "planned sink" .-> F["Amazon S3<br/>Bronze JSONL"]
     E --> G["Operational event projection"]
     F --> H["Analytics / lakehouse pipeline"]
 ```
 
-**Solid lines** represent the current implemented validation path. **Dotted lines** represent intended destination integrations; they are not a claim that live persistence or cloud resources are already configured.
+Solid lines represent the current producer and validation path. The Neon consumer and sink are implemented separately but still require live integration verification. S3 persistence and cloud deployment remain pending.
 
-### Design principles
-
-- **Contract-first events:** validate payloads before they enter downstream processing.
-- **At-least-once-friendly processing:** design consumers to tolerate redelivery and deduplicate by stable event identifiers.
-- **Version-aware ordering:** use `reservation_id` and `reservation_version` to reconcile events that arrive out of order.
-- **Separate responsibilities:** the event producer, OLTP projection, and Bronze capture should be independently deployable.
-- **Safe evolution:** F2 events must not silently rewrite or corrupt F3's operational schema.
-- **Cost-conscious infrastructure:** validate locally before requesting managed cloud resources.
-- **No false deployment claims:** a successful broker acknowledgement is not proof of database or object-store persistence.
-
-## 📨 Event lifecycle
+## Event lifecycle
 
 The simulator supports six reservation event types:
 
-| Event type | Hospitality meaning |
+| Event type | Meaning |
 | --- | --- |
 | `reservation.created` | A reservation is created |
 | `reservation.updated` | Reservation details are modified |
@@ -75,51 +63,31 @@ The simulator supports six reservation event types:
 | `reservation.checked_in` | The guest checks in |
 | `reservation.checked_out` | The guest checks out |
 
-A reservation can include zero to three modifications before its final outcome. Configurable out-of-order delivery helps test consumers that cannot assume creation always arrives before an update. All generated values are test data, not live hotel prices or guest records.
+The contract includes a stable `event_id`, `schema_version`, `hotel_id`, `reservation_id`, and `reservation_version`. Consumers must deduplicate by event ID and reconcile lifecycle order using reservation version. See [`docs/event-contract.md`](docs/event-contract.md).
 
-### Contract summary
+The F2 `reservation_id` is not the integer primary key of F3's reservations table. F3 mappings and status translations must be explicitly approved; do not fabricate guest identifiers or financial values.
 
-The authoritative specification is [`docs/event-contract.md`](docs/event-contract.md).
-
-| Field | Purpose |
-| --- | --- |
-| `event_id` | Stable UUID for event-level deduplication |
-| `schema_version` | Contract version; currently `1.2` |
-| `source` | Identifies the F2 channel-manager simulator |
-| `event_type` | One of the six lifecycle events |
-| `occurred_at` | Timezone-aware timestamp normalized to UTC |
-| `hotel_id` | Canonical hotel code |
-| `reservation_id` | Stable synthetic F2 reservation identifier |
-| `reservation_version` | Monotonic lifecycle version for ordering |
-| `data` | Minimal reservation facts and canonical codes |
-
-The event's `reservation_id` is **not** the integer primary key of the F3 reservations table. A Neon projection must define an explicit mapping and preserve the original event. Statuses such as `modified`, `checked_in`, and `checked_out` must not be silently translated into an incompatible F3 status.
-
-## 🧰 Technology stack
+## Technology stack
 
 | Technology | Responsibility |
 | --- | --- |
-| Python 3.12+ | Event generation and consumer application |
+| Python 3.12+ | Event generation and consumers |
 | Pydantic 2 | Event schema validation |
-| Apache Kafka / `confluent-kafka` | Streaming producer and consumer client |
-| RabbitMQ / `pika` | Legacy implementation retained during migration |
-| PostgreSQL on Neon | Intended OLTP event ledger and current-state projection |
-| Amazon S3 | Intended raw Bronze landing destination |
-| Docker Compose | Local broker and integration environment |
-| pytest | Automated tests |
-| Ruff | Python linting and formatting |
-| GitHub Actions | CI, when configured and passing for the relevant commit |
+| Apache Kafka / `confluent-kafka` | Streaming producer and consumers |
+| PostgreSQL on Neon | Intended OLTP event ledger |
+| Amazon S3 | Planned raw Bronze landing destination |
+| Docker Compose | Local Kafka environment |
+| pytest and Ruff | Tests, linting, and formatting |
+| GitHub Actions | Continuous integration |
 
-RabbitMQ is retained during the migration to avoid removing a working legacy path before the Kafka path has been validated. It should not be described as removed until the migration is explicitly accepted and the repository's Compose files, documentation, tests, and operational dependencies agree.
-
-## 🚀 Quick start
+## Quick start
 
 ### Prerequisites
 
 - Python 3.12 or newer
 - Git
 - Docker Desktop with Docker Compose v2
-- A terminal (PowerShell on Windows, or Bash/Zsh on macOS/Linux)
+- PowerShell, Bash, or Zsh
 
 ### 1. Clone and install
 
@@ -147,9 +115,9 @@ python -m pip install -e ".[dev]"
 cp .env.example .env
 ```
 
-Review `.env.example` and set only the variables needed for the component being tested. Never commit a real password, API key, cloud credential, or connection URI. Keep local `.env` files out of Git.
+Never commit real passwords, API keys, cloud credentials, or database connection URLs. Keep local `.env` files out of Git.
 
-### 2. Start the local Kafka broker
+### 2. Start Kafka
 
 ```powershell
 docker compose -f docker-compose.kafka.yml config
@@ -157,52 +125,51 @@ docker compose -f docker-compose.kafka.yml up -d
 docker compose -f docker-compose.kafka.yml ps
 ```
 
-Check the broker logs if it does not become healthy:
+Inspect logs if the broker does not become healthy:
 
 ```powershell
 docker compose -f docker-compose.kafka.yml logs --tail 100
 ```
 
-### 3. Create the versioned topic
+### 3. Create the reservation topic
 
 ```powershell
 docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic reservation.events.v1_2 --partitions 3 --replication-factor 1
 ```
 
-The local topic uses a replication factor of one. That is suitable for local development, **not** a high-availability production cluster.
+The single-broker setup is for local development, not high availability.
 
-### 4. Publish a bounded test batch
+### 4. Publish a bounded batch
 
 ```powershell
 python -m src.kafka_producer --count 20 --seed 42
 ```
 
-The producer uses the reservation identifier as the Kafka message key and reports delivery failures. A successful publish confirms broker acceptance; it does not prove that a downstream sink has stored the event.
+The producer uses `reservation_id` as the Kafka message key. Successful delivery confirms broker acceptance, not downstream persistence.
 
 ### 5. Run the validation consumer
 
-Open a second terminal with the virtual environment activated:
+In a second terminal with the virtual environment activated:
 
 ```powershell
 python -m src.kafka_consumer
 ```
 
-The current validation consumer parses each message against the Pydantic event model and commits its offset after successful validation and processing. At this stage, its processor logs safe event metadata; it **does not write to Neon or S3**. Invalid messages are left uncommitted and stop the current consumer rather than being silently skipped. A production-ready dead-letter workflow remains a required acceptance item.
+The validation consumer parses events with Pydantic and logs safe metadata. It does not persist to Neon or S3. Invalid messages remain uncommitted and stop the current consumer; a production retry/dead-letter workflow remains a required acceptance item.
 
-### 6. Run the Neon event-ledger consumer (optional; requires an approved migration)
+### 6. Run the Neon ledger consumer (optional)
 
-The repository now includes a separate Kafka consumer that writes validated events to the additive `public.reservation_event_ledger` table. It does not modify F3 operational reservation records. Before running it, obtain the approved Neon connection URL and apply `migrations/001_create_reservation_event_ledger.sql` through the team’s migration process. Never run a destructive seed or reload command against the shared database.
+Before running this component, the team must approve and apply `migrations/001_create_reservation_event_ledger.sql` through the database migration process. This additive migration is designed for the streaming-owned event ledger and must not be assumed to have been applied to the shared Neon project.
 
-Set `NEON_DATABASE_URL` in your untracked local `.env` file or deployment secret store, then run:
+Set `NEON_DATABASE_URL` in an untracked local `.env` file or approved secret store, then run:
 
 ```powershell
-python -m pip install -e ".[dev]"
 python -m src.neon_consumer
 ```
 
-The consumer commits each Kafka offset only after the Neon transaction succeeds. Duplicate event IDs with the same payload are treated as already persisted; the same ID with a different payload raises an error. Invalid messages and database failures are left uncommitted. A dedicated retry/DLQ workflow is still required before production use.
+The consumer commits a Kafka offset only after the Neon transaction succeeds. Duplicate event IDs with identical payloads are treated as already persisted; a conflicting payload for the same ID raises an error. Database failures leave the offset uncommitted for replay.
 
-**This command has not been verified against the live Neon project in this session.** The migration must be applied and the connection tested before claiming live persistence.
+**Live Neon persistence has not been verified in this session.** Do not claim it is operational until the migration, connection, and integration behavior are verified.
 
 ### 7. Run quality checks
 
@@ -212,106 +179,62 @@ ruff format --check .
 pytest
 ```
 
-Run the checks after changing code and record the actual command output in the pull request or release notes. Do not mark a check as passing unless it was executed successfully.
+Record actual command results for each change; do not mark checks as passing without evidence.
 
-## ⚙️ Configuration
+## Configuration
 
-Configuration examples are documented in [`.env.example`](.env.example). The exact variables depend on the component and deployment mode.
+The `.env.example` file contains Kafka settings and an optional Neon URL placeholder. Store credentials only in local untracked environment files or the approved deployment secret manager.
 
-| Variable family | Used for |
-| --- | --- |
-| `KAFKA_BOOTSTRAP_SERVERS` | Kafka broker address |
-| `KAFKA_RESERVATION_TOPIC` | Versioned reservation topic |
-| `KAFKA_GROUP_ID` | Validation consumer group |
-| RabbitMQ settings | Legacy producer and consumer |
-| Database connection settings | Future or separately configured Neon sink |
-| S3 / AWS settings | Future or separately configured Bronze sink |
+## Neon and S3 integration
 
-Use placeholders in documentation and examples. Supply credentials through environment variables, a local untracked `.env` file, or the approved deployment secret manager. Do not paste secrets into source code, README files, issue descriptions, screenshots, or logs.
+The target design has independent sink paths:
 
-## 🗃️ Neon and S3 integration contract
+1. **Neon OLTP:** persist the immutable event in a ledger and commit its Kafka offset only after the database transaction succeeds.
+2. **S3 Bronze:** preserve raw validated event records in partitioned objects and commit offsets only after the object write is confirmed.
 
-The intended streaming architecture has two independent sink paths:
+S3 persistence is not implemented in the current default branch. Before production use, validate schema migration, permissions, idempotency, replay behavior, retries, dead-letter handling, and monitoring.
 
-1. **Neon OLTP:** persist the immutable event in an inbox/ledger and maintain a monotonic current-state projection in one database transaction. Commit the Kafka offset only after the transaction succeeds.
-2. **S3 Bronze:** preserve raw validated event records in partitioned objects, then commit offsets only after the object write is confirmed.
+## Security and privacy
 
-These are design requirements, not proof of a completed deployment. Before enabling either path, the team must review the additive SQL migration, validate the exact Neon schema and permissions, configure S3 access and partitioning, test replay/idempotency, and prove failure recovery.
-
-### Data integrity rules
-
-- Deduplicate by `event_id`.
-- Do not overwrite a newer reservation state with an older `reservation_version`.
-- Preserve the raw event for audit and replay.
-- Resolve canonical hotel, room, and channel codes against the shared catalog.
-- Do not fabricate guest identity or infer missing financial values.
-- Keep F2's event history separate from F3's operational constraints unless an approved mapping is defined.
-- Do not commit a Kafka offset before the required destination confirms durable persistence.
-
-## 🛡️ Security and privacy
-
-- Only synthetic reservation data belongs in this repository.
-- Do not store guest names, emails, telephone numbers, payment details, or production reservation records in events, tests, or fixtures.
-- Never commit credentials or connection strings.
-- Use least-privilege roles for the broker, database, and object store.
-- Keep local development credentials isolated and never expose development ports to untrusted networks.
+- Use synthetic reservation data only.
+- Never commit guest names, contact details, payment data, credentials, or real connection strings.
+- Use least-privilege roles for Kafka, Neon, and S3.
 - Redact secrets from logs and error reports.
-- Rotate any credential that may have been exposed; removing it from the latest file alone does not remove it from Git history.
+- Rotate any credential that may have been exposed; deleting it from the latest file does not remove it from Git history.
 
-## 🧪 Testing strategy
-
-| Test layer | What it should prove |
-| --- | --- |
-| Unit tests | Event generation, schema validation, ordering metadata, and error handling |
-| Producer tests | Serialization, message keys, delivery callbacks, and failure reporting |
-| Consumer tests | Offset commit ordering, shutdown, malformed events, retry, and dead-letter behavior |
-| Contract tests | Exact catalog codes, allowed event types, and schema-version compatibility |
-| Kafka integration tests | Topic configuration, publish/consume round trip, and restart behavior |
-| Neon integration tests | Transactional inbox/projection, deduplication, rollback, and replay safety |
-| S3 integration tests | Durable object writes, stable partition paths, and offset handling |
-| End-to-end tests | Event generation through every approved destination |
-
-## 📚 Repository guide
+## Repository guide
 
 | Path | Purpose |
 | --- | --- |
-| `src/events.py` | Event schema, deterministic generation, and lifecycle data |
-| `src/producer.py` | Legacy RabbitMQ publisher |
-| `src/consumer.py` | Legacy RabbitMQ consumer |
+| `src/events.py` | Event schema and synthetic lifecycle generation |
 | `src/kafka_producer.py` | Kafka event publisher |
-| `src/kafka_consumer.py` | Kafka validation consumer; logs validated event metadata |
-| `src/neon_consumer.py` | Independent Kafka consumer that writes to the Neon event ledger after migration |
-| `src/neon_sink.py` | Idempotent Neon event-ledger persistence with Kafka provenance |
-| `docker-compose.yml` | Legacy/local RabbitMQ environment |
+| `src/kafka_consumer.py` | Kafka validation consumer |
+| `src/neon_consumer.py` | Independent consumer for Neon event-ledger persistence |
+| `src/neon_sink.py` | Idempotent Neon event-ledger persistence |
 | `docker-compose.kafka.yml` | Local Kafka environment |
 | `docs/event-contract.md` | Versioned event contract and mapping constraints |
-| `migrations/001_create_reservation_event_ledger.sql` | Proposed additive schema for streaming-owned data; requires review before applying |
+| `migrations/001_create_reservation_event_ledger.sql` | Proposed additive event-ledger schema; requires review before applying |
 | `tests/` | Automated test suite |
 | `.env.example` | Configuration template without real credentials |
 
-## 🗺️ Delivery checklist
+## Delivery checklist
 
-- [x] Publish the synthetic F2 event contract at version 1.2.
-- [x] Add the Kafka producer and validation consumer to the default branch.
+- [x] Publish synthetic F2 event contract version 1.2.
+- [x] Add Kafka producer and validation consumer.
 - [x] Add local Kafka Compose configuration.
-- [ ] Run the full test suite and Ruff checks on the current default-branch commit.
+- [x] Add an isolated Neon event-ledger sink and consumer to `main`.
+- [ ] Run full tests and Ruff checks on the current default-branch commit.
 - [ ] Run Kafka broker integration tests from a clean environment.
-- [ ] Complete and review the Neon schema migration before applying it.
-- [x] Add an isolated Neon event-ledger sink and separate Kafka consumer to `main`.
-- [ ] Apply the reviewed event-ledger migration in Neon and verify live persistence.
-- [ ] Add automated sink tests and database integration tests.
+- [ ] Review and apply the Neon event-ledger migration through the approved process.
+- [ ] Verify live Neon persistence with integration tests.
 - [ ] Implement and test S3 Bronze persistence.
-- [ ] Add and verify bounded retries and a dead-letter workflow.
-- [ ] Verify canonical catalog compatibility against the pinned source version.
-- [ ] Validate end-to-end replay, idempotency, and offset behavior.
-- [ ] Confirm security, monitoring, deployment ownership, and budget before production deployment.
-- [ ] Update this checklist only when the corresponding evidence is available.
+- [ ] Implement and test bounded retries and a dead-letter workflow.
+- [ ] Validate replay, idempotency, and offset behavior end to end.
+- [ ] Confirm deployment ownership, security, monitoring, and budget before production use.
 
-## 🏁 Definition of done
+## Definition of done
 
-This repository can be called **production-ready** only when the approved architecture is implemented on `main`, automated checks pass, the event contract is agreed, Neon and S3 persistence are verified with integration tests, credentials are managed securely, failure recovery is demonstrated, and deployment/monitoring ownership is documented.
-
-Until those checks are complete, the project status remains **development**, not production.
+Production readiness requires passing automated checks, an agreed event contract, verified Neon and S3 persistence, secure credential management, demonstrated failure recovery, and documented deployment and monitoring ownership. Until then, this project remains in development.
 
 ---
 
