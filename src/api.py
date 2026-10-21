@@ -123,3 +123,15 @@ def create_reservation(request: CreateReservationRequest) -> PublishResult:
     )
     topic = publish_to_kafka(event)
     return PublishResult(status="accepted_by_kafka", event_id=str(event.event_id), topic=topic)
+
+
+@app.post(
+    "/events",
+    response_model=PublishResult,
+    status_code=status.HTTP_202_ACCEPTED,
+    tags=["events"],
+)
+def ingest_event(event: ReservationEvent) -> PublishResult:
+    """Accept an existing event from the synthetic seed and forward it to Kafka."""
+    topic = publish_to_kafka(event)
+    return PublishResult(status="accepted_by_kafka", event_id=str(event.event_id), topic=topic)
