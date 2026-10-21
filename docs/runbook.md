@@ -1,15 +1,13 @@
-# Local runbook
+# Kafka local runbook
 
-## Start RabbitMQ
+## Start Kafka
 
 ```powershell
 Copy-Item .env.example .env
-docker compose up -d rabbitmq
-docker compose ps
-docker compose logs rabbitmq
+docker compose -f docker-compose.kafka.yml up -d
+docker compose -f docker-compose.kafka.yml ps
+docker compose -f docker-compose.kafka.yml logs --tail 100
 ```
-
-RabbitMQ AMQP port: `5672`. Management UI: `http://localhost:15672`. Local defaults are `guest/guest`; use them only for local development.
 
 ## Install and validate
 
@@ -22,40 +20,47 @@ ruff format --check .
 pytest
 ```
 
-## Publish a controlled batch
+## Create the topic and publish test events
 
 ```powershell
-python -m src.producer --count 20 --seed 42
+docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic reservation.events.v1_2 --partitions 3 --replication-factor 1
+python -m src.kafka_producer --count 20 --seed 42
 ```
 
-Expected: the summary line reports `total=20` messages confirmed by RabbitMQ. Open the management UI, select Queues and Streams, and inspect `buenavista.reservation.events`; the ready-message count should reflect messages waiting for a consumer.
+The local Kafka broker uses a single node and replication factor one; this is for development only.
 
-## Run the continuous stream
+## Run the validation consumer
+
+In another terminal:
 
 ```powershell
-python -m src.producer --continuous --duration 75
+python -m src.kafka_consumer
 ```
 
-Expected: one `throughput` line per second, 15 events per second during the first 10 seconds of each minute and 5 otherwise, then a summary with `peak=15 ev/s`. Run `python -m src.consumer` in another terminal to drain the queue; in the management UI the exchange `buenavista.reservations` shows the publish rate.
+The validation consumer checks the schema and logs safe metadata. It does not write to Neon or S3.
+
+## Run the Neon ledger consumer
+
+Only after the additive migration has been reviewed and applied through the approved database process, set `NEON_DATABASE_URL` in your untracked local `.env` file and run:
+
+```powershell
+python -m src.neon_consumer
+```
+
+Live Neon persistence must be verified before treating the sink as operational.
 
 ## Troubleshooting
 
-- **Connection refused:** run `docker compose ps` and `docker compose logs rabbitmq`; check port 5672.
-- **Authentication failure:** confirm local `RABBITMQ_USER` and `RABBITMQ_PASSWORD` match the container settings. If changing defaults after the RabbitMQ volume has already been initialized, recreating the container alone may not reset credentials.
-- **Queue has zero ready messages:** confirm the publish logs; a consumer may already have received messages.
-- **Duplicate processing:** use `event_id` as the downstream idempotency key.
-- **Messages repeatedly fail:** define bounded retries and a dead-letter queue before production.
+- **Connection refused:** inspect `docker compose -f docker-compose.kafka.yml ps` and the broker logs; confirm port 9092.
+- **Topic not found:** create `reservation.events.v1_2` with the command above.
+- **Duplicate events:** use `event_id` as the idempotency key and `reservation_version` for ordering.
+- **Database failure:** do not commit the Kafka offset until the destination transaction succeeds.
+- **Invalid event:** current validation consumer leaves the offset uncommitted; a production retry/dead-letter workflow remains pending.
 
-## Stop local services
-
-```powershell
-docker compose down
-```
-
-Delete the local RabbitMQ volume as well (this removes local broker state):
+## Stop Kafka
 
 ```powershell
-docker compose down -v
+docker compose -f docker-compose.kafka.yml down
 ```
 
-Do not expose port 5672 or the management UI publicly. Use a secured, approved deployment configuration outside local development.
+This stops local containers but preserves broker data unless volumes are explicitly removed. Do not expose development broker ports to untrusted networks.
