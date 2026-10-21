@@ -189,7 +189,22 @@ python -m src.kafka_consumer
 
 The current validation consumer parses each message against the Pydantic event model and commits its offset after successful validation and processing. At this stage, its processor logs safe event metadata; it **does not write to Neon or S3**. Invalid messages are left uncommitted and stop the current consumer rather than being silently skipped. A production-ready dead-letter workflow remains a required acceptance item.
 
-### 6. Run the Neon event-ledger consumer (optional; requires an approved migration)\n\nThe repository now includes a separate Kafka consumer that writes validated events to the additive `public.reservation_event_ledger` table. It does not modify F3 operational reservation records. Before running it, obtain the approved Neon connection URL and apply `migrations/001_create_reservation_event_ledger.sql` through the team’s migration process. Never run a destructive seed or reload command against the shared database.\n\nSet `NEON_DATABASE_URL` in your untracked local `.env` file or deployment secret store, then run:\n\n```powershell\npython -m pip install -e ".[dev]"\npython -m src.neon_consumer\n```\n\nThe consumer commits each Kafka offset only after the Neon transaction succeeds. Duplicate event IDs with the same payload are treated as already persisted; the same ID with a different payload raises an error. Invalid messages and database failures are left uncommitted. A dedicated retry/DLQ workflow is still required before production use.\n\n**This command has not been verified against the live Neon project in this session.** The migration must be applied and the connection tested before claiming live persistence.\n\n### 7. Run quality checks
+### 6. Run the Neon event-ledger consumer (optional; requires an approved migration)
+
+The repository now includes a separate Kafka consumer that writes validated events to the additive `public.reservation_event_ledger` table. It does not modify F3 operational reservation records. Before running it, obtain the approved Neon connection URL and apply `migrations/001_create_reservation_event_ledger.sql` through the team’s migration process. Never run a destructive seed or reload command against the shared database.
+
+Set `NEON_DATABASE_URL` in your untracked local `.env` file or deployment secret store, then run:
+
+```powershell
+python -m pip install -e ".[dev]"
+python -m src.neon_consumer
+```
+
+The consumer commits each Kafka offset only after the Neon transaction succeeds. Duplicate event IDs with the same payload are treated as already persisted; the same ID with a different payload raises an error. Invalid messages and database failures are left uncommitted. A dedicated retry/DLQ workflow is still required before production use.
+
+**This command has not been verified against the live Neon project in this session.** The migration must be applied and the connection tested before claiming live persistence.
+
+### 7. Run quality checks
 
 ```powershell
 ruff check .
@@ -264,11 +279,13 @@ These are design requirements, not proof of a completed deployment. Before enabl
 | `src/producer.py` | Legacy RabbitMQ publisher |
 | `src/consumer.py` | Legacy RabbitMQ consumer |
 | `src/kafka_producer.py` | Kafka event publisher |
-| `src/kafka_consumer.py` | Kafka validation consumer; logs validated event metadata |\n| `src/neon_consumer.py` | Independent Kafka consumer that writes to the Neon event ledger after migration |\n| `src/neon_sink.py` | Idempotent Neon event-ledger persistence with Kafka provenance |
+| `src/kafka_consumer.py` | Kafka validation consumer; logs validated event metadata |
+| `src/neon_consumer.py` | Independent Kafka consumer that writes to the Neon event ledger after migration |
+| `src/neon_sink.py` | Idempotent Neon event-ledger persistence with Kafka provenance |
 | `docker-compose.yml` | Legacy/local RabbitMQ environment |
 | `docker-compose.kafka.yml` | Local Kafka environment |
 | `docs/event-contract.md` | Versioned event contract and mapping constraints |
-| `sql/streaming_schema.sql` | Proposed additive schema for streaming-owned data; requires review before applying |
+| `migrations/001_create_reservation_event_ledger.sql` | Proposed additive schema for streaming-owned data; requires review before applying |
 | `tests/` | Automated test suite |
 | `.env.example` | Configuration template without real credentials |
 
@@ -280,7 +297,9 @@ These are design requirements, not proof of a completed deployment. Before enabl
 - [ ] Run the full test suite and Ruff checks on the current default-branch commit.
 - [ ] Run Kafka broker integration tests from a clean environment.
 - [ ] Complete and review the Neon schema migration before applying it.
-- [x] Add an isolated Neon event-ledger sink and separate Kafka consumer to `main`.\n- [ ] Apply the reviewed event-ledger migration in Neon and verify live persistence.\n- [ ] Add automated sink tests and database integration tests.
+- [x] Add an isolated Neon event-ledger sink and separate Kafka consumer to `main`.
+- [ ] Apply the reviewed event-ledger migration in Neon and verify live persistence.
+- [ ] Add automated sink tests and database integration tests.
 - [ ] Implement and test S3 Bronze persistence.
 - [ ] Add and verify bounded retries and a dead-letter workflow.
 - [ ] Verify canonical catalog compatibility against the pinned source version.
