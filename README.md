@@ -1,4 +1,4 @@
-# 🏨 Buenavista | Hospitality Streaming Platform
+# 🏨 Hospedaplus | Hospitality Streaming Platform
 
 <p align="center">
   <strong>Reliable reservation events for smarter hospitality operations.</strong><br/>
