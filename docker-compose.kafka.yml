@@ -1,6 +1,5 @@
 # Local Kafka development profile for the Kafka migration.
-# This file is intentionally separate from docker-compose.yml so the existing
-# RabbitMQ setup and its queued messages remain untouched during the transition.
+# Kafka is the sole supported broker in the current repository configuration.
 services:
   kafka:
     image: apache/kafka:4.1.1
