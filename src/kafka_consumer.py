@@ -44,7 +44,7 @@ def consume_events() -> None:
     global shutdown_requested
     shutdown_requested = False
     broker = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
-    topic = os.getenv("KAFKA_RESERVATION_TOPIC", "reservation.events.v1_2")
+    topic = os.getenv("KAFKA_RESERVATION_TOPIC", "reservation.events.v1_3")
     group_id = os.getenv("KAFKA_GROUP_ID", "buenavista-validation-consumer")
     consumer = Consumer(
         {

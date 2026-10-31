@@ -30,7 +30,7 @@ The system is Kafka-first. Kafka is the sole message broker supported by this re
 | Simulated portfolio | 28 hotels across five countries; 4,000 rooms |
 | Source domain | F2 — channel-manager events |
 | Event format | Versioned JSON validated with Pydantic |
-| Current event contract | **1.2** |
+| Current event contract | **1.3** |
 | Canonical reference data | Pinned catalog from `HospedaPlus/db_simulated` |
 | Privacy | Synthetic data only; no direct guest identifiers or payment data |
 | Main branch | `main` |
@@ -40,10 +40,11 @@ The system is Kafka-first. Kafka is the sole message broker supported by this re
 ```mermaid
 flowchart LR
     A["Synthetic F2 event generator"] --> B["Pydantic validation"]
-    B --> C["Apache Kafka<br/>reservation.events.v1_2"]
+    B --> C["Apache Kafka<br/>reservation.events.v1_3"]
     C --> D["Kafka validation consumer"]
     C -. "independent consumer group" .-> E["Neon PostgreSQL<br/>event ledger"]
-    C -. "planned sink" .-> F["Amazon S3<br/>Bronze JSONL"]
+    C -. "independent consumer group" .-> F["Amazon S3<br/>Bronze JSONL (gzip)"]
+    C -. "invalid messages" .-> X["Kafka DLQ<br/>reservation.events.dlq"]
     E --> G["Operational event projection"]
     F --> H["Analytics / lakehouse pipeline"]
 ```
@@ -134,18 +135,35 @@ docker compose -f docker-compose.kafka.yml logs --tail 100
 ### 3. Create the reservation topic
 
 ```powershell
-docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic reservation.events.v1_2 --partitions 3 --replication-factor 1
+docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic reservation.events.v1_3 --partitions 3 --replication-factor 1
+docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic reservation.events.dlq --partitions 1 --replication-factor 1
 ```
 
 The single-broker setup is for local development, not high availability.
 
-### 4. Publish a bounded batch
+### 4. Publish events
+
+Bounded batch (sends 20 events as fast as possible and stops):
 
 ```powershell
 python -m src.kafka_producer --count 20 --seed 42
 ```
 
-The producer uses `reservation_id` as the Kafka message key. Successful delivery confirms broker acceptance, not downstream persistence.
+Continuous stream (5 events/s, with a 15 events/s peak during the first 10 s of every minute; stop with Ctrl+C or `--duration`):
+
+```powershell
+python -m src.kafka_producer --continuous --duration 120
+```
+
+High-season simulation: extra demand for one hotel and stay window (repeat `--surge` for more hotels):
+
+```powershell
+python -m src.kafka_producer --continuous --surge HP-PT-003:2026-10-20:2026-10-26:3.0
+```
+
+Other options: `--base-rate`, `--peak-rate`, `--peak-every`, `--peak-duration`, `--occupancy` (default 0.68) and `--out-of-order-rate` (default 0.05). The producer logs the best events-per-second second it observed.
+
+The producer uses `reservation_id` as the Kafka message key, so all events of a reservation land in the same partition. It uses `acks=all` and idempotence. Successful delivery confirms broker acceptance, not downstream persistence.
 
 ### 5. Run the validation consumer
 
@@ -167,11 +185,21 @@ Set `NEON_DATABASE_URL` in an untracked local `.env` file or approved secret sto
 python -m src.neon_consumer
 ```
 
-The consumer commits a Kafka offset only after the Neon transaction succeeds. Duplicate event IDs with identical payloads are treated as already persisted; a conflicting payload for the same ID raises an error. Database failures leave the offset uncommitted for replay.
+The consumer commits a Kafka offset only after the Neon transaction succeeds. Duplicate event IDs with identical payloads are treated as already persisted; a conflicting payload for the same ID raises an error. Database failures leave the offset uncommitted for replay. Messages that fail validation are copied to `reservation.events.dlq` (with the error in a header) and the stream continues.
 
 **Live Neon persistence has not been verified in this session.** Do not claim it is operational until the migration, connection, and integration behavior are verified.
 
-### 7. Run quality checks
+### 7. Land raw events in S3 Bronze (optional)
+
+Set `BRONZE_BUCKET` (and optionally `BRONZE_KMS_KEY_ID`) in `.env`. AWS credentials come from your AWS CLI profile locally or from the ECS task role in AWS. Then run:
+
+```powershell
+python -m src.bronze_consumer
+```
+
+Every 5 minutes (`BRONZE_FLUSH_SECONDS`) it writes one gzip JSON Lines object per partition to `s3://<bucket>/bronze/f2_reservation_events/ingest_date=YYYY-MM-DD/hour=HH/` and commits offsets only after S3 confirms the write. Duplicates after a replay are removed in Silver by `event_id`.
+
+### 8. Run quality checks
 
 ```powershell
 ruff check .
@@ -192,7 +220,7 @@ The target design has independent sink paths:
 1. **Neon OLTP:** persist the immutable event in a ledger and commit its Kafka offset only after the database transaction succeeds.
 2. **S3 Bronze:** preserve raw validated event records in partitioned objects and commit offsets only after the object write is confirmed.
 
-S3 persistence is not implemented in the current default branch. Before production use, validate schema migration, permissions, idempotency, replay behavior, retries, dead-letter handling, and monitoring.
+S3 persistence is implemented in `src/bronze_consumer.py` (unit tested; live AWS verification pending). Before production use, validate schema migration, permissions, idempotency, replay behavior, retries, dead-letter handling, and monitoring.
 
 ## Security and privacy
 
@@ -210,6 +238,7 @@ S3 persistence is not implemented in the current default branch. Before producti
 | `src/kafka_producer.py` | Kafka event publisher |
 | `src/kafka_consumer.py` | Kafka validation consumer |
 | `src/neon_consumer.py` | Independent consumer for Neon event-ledger persistence |
+| `src/bronze_consumer.py` | Independent consumer that lands raw events in S3 Bronze |
 | `src/neon_sink.py` | Idempotent Neon event-ledger persistence |
 | `docker-compose.kafka.yml` | Local Kafka environment |
 | `docs/event-contract.md` | Versioned event contract and mapping constraints |
@@ -219,7 +248,8 @@ S3 persistence is not implemented in the current default branch. Before producti
 
 ## Delivery checklist
 
-- [x] Publish synthetic F2 event contract version 1.2.
+- [x] Publish synthetic F2 event contract version 1.3 (guest reference, loyalty tier, nightly rate, local hotel time).
+- [x] Continuous mode with peaks (≥ 10 events/s) and demand calibrated to 68% occupancy, with demand surges.
 - [x] Add Kafka producer and validation consumer.
 - [x] Add local Kafka Compose configuration.
 - [x] Add an isolated Neon event-ledger sink and consumer to `main`.
@@ -227,8 +257,10 @@ S3 persistence is not implemented in the current default branch. Before producti
 - [ ] Run Kafka broker integration tests from a clean environment.
 - [ ] Review and apply the Neon event-ledger migration through the approved process.
 - [ ] Verify live Neon persistence with integration tests.
-- [ ] Implement and test S3 Bronze persistence.
-- [ ] Implement and test bounded retries and a dead-letter workflow.
+- [x] Implement and unit test S3 Bronze persistence.
+- [ ] Verify S3 Bronze persistence against the real bucket.
+- [x] Dead-letter topic for invalid messages in the Neon consumer.
+- [ ] Apply the inventory projection (`reservar()` / `liberar()`) in the same transaction as the ledger insert.
 - [ ] Validate replay, idempotency, and offset behavior end to end.
 - [ ] Confirm deployment ownership, security, monitoring, and budget before production use.
 

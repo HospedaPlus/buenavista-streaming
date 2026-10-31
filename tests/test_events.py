@@ -1,7 +1,7 @@
 """Unit tests for the synthetic reservation event contract."""
 
 from collections import defaultdict
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from itertools import islice
 
 import pytest
@@ -9,15 +9,23 @@ from pydantic import ValidationError
 
 from src.events import (
     CATALOG,
+    CHECK_IN_TIME,
     EVENT_TYPES,
     F2_CHANNEL_CODES,
+    HOTEL_BY_CODE,
     HOTEL_IDS,
+    HOTEL_TZ,
     ROOM_TYPES,
+    SIMULATION_START,
     STATUS_BY_EVENT_TYPE,
+    DemandSurge,
     ReservationEvent,
     ReservationPayload,
     build_event,
+    build_reservation_events,
     generate_events,
+    loyalty_tier,
+    mean_minutes_between_bookings,
 )
 
 
@@ -27,7 +35,7 @@ def test_event_is_valid_and_uses_utc():
     assert isinstance(event, ReservationEvent)
     assert event.occurred_at.tzinfo is not None
     assert event.source == "f2-channel-manager"
-    assert event.schema_version == "1.2"
+    assert event.schema_version == "1.3"
 
 
 def test_same_seed_and_index_produce_same_event():
@@ -59,12 +67,21 @@ def test_checkout_must_be_after_checkin():
             check_out="2026-11-01",
             room_type="SINGLE",
             guests=2,
+            guest_ref="G-0000001",
+            loyalty_tier="none",
+            nightly_rate=50,
             total_amount=100,
             currency="COP",
             status="confirmed",
             channel_code="expedia",
             refundable=True,
         )
+
+
+def local_arrival(event):
+    """Check-in time (15:00) in the hotel's own timezone."""
+    day = datetime.fromisoformat(event.data.check_in)
+    return datetime.combine(day.date(), CHECK_IN_TIME, tzinfo=HOTEL_TZ[event.hotel_id])
 
 
 def take(count, **kwargs):
@@ -80,6 +97,9 @@ def test_payload_rejects_guests_over_room_capacity():
             check_out="2026-11-04",
             room_type="SINGLE",
             guests=2,
+            guest_ref="G-0000001",
+            loyalty_tier="none",
+            nightly_rate=50,
             total_amount=100,
             currency="COP",
             status="confirmed",
@@ -163,7 +183,7 @@ def test_stream_contains_multiple_modifications_and_late_cancellations():
         if event.event_type == "reservation.updated":
             updates[event.reservation_id] += 1
         if event.event_type == "reservation.cancelled":
-            arrival = datetime.fromisoformat(event.data.check_in).replace(hour=15, tzinfo=UTC)
+            arrival = local_arrival(event)
             if arrival - event.occurred_at < timedelta(hours=24):
                 late_cancellations += 1
     assert max(updates.values()) >= 2
@@ -172,10 +192,13 @@ def test_stream_contains_multiple_modifications_and_late_cancellations():
 
 def test_cancellation_rate_is_close_to_business_context():
     """About 37% of reservations are cancelled, as stated in the business context."""
-    outcomes = [e.event_type for e in take(20000, out_of_order_rate=0)]
-    created = outcomes.count("reservation.created")
-    cancelled = outcomes.count("reservation.cancelled")
-    assert 0.30 < cancelled / created < 0.44
+    # Count whole lifecycles: a truncated stream would miss cancellations that
+    # happen days after the booking.
+    lifecycles = [build_reservation_events(42, number, SIMULATION_START) for number in range(5000)]
+    cancelled = sum(
+        any(e.event_type == "reservation.cancelled" for e in events) for events in lifecycles
+    )
+    assert 0.33 < cancelled / len(lifecycles) < 0.41
 
 
 def test_invalid_out_of_order_rate_is_rejected():
@@ -204,3 +227,79 @@ def test_generated_dimensions_are_canonical_and_capacity_valid():
         assert payload.currency == hotels[event.hotel_id]["currency"]
         assert payload.guests <= ROOM_TYPES[payload.room_type]["max_guests"]
         assert channels[payload.channel_code]["source"] == "F2"
+
+
+def test_check_in_uses_the_hotel_local_timezone():
+    """A check-in is 15:00 local time, so in UTC it depends on the hotel's timezone."""
+    for event in take(3000, out_of_order_rate=0):
+        if event.event_type == "reservation.checked_in":
+            local = event.occurred_at.astimezone(HOTEL_TZ[event.hotel_id])
+            # Check-in happens between 15:00 and 21:00 local time.
+            assert 15 <= local.hour <= 21
+            assert local.date().isoformat() == event.data.check_in
+
+
+def test_payload_carries_guest_reference_tier_and_nightly_rate():
+    """RN-08 and RN-09 need a guest reference and tier; RN-07 needs the nightly rate."""
+    for event in take(500):
+        data = event.data
+        assert data.guest_ref.startswith("G-")
+        assert data.loyalty_tier in {"none", "silver", "gold"}
+        nights = (
+            datetime.fromisoformat(data.check_out) - datetime.fromisoformat(data.check_in)
+        ).days
+        assert data.total_amount == pytest.approx(data.nightly_rate * nights, abs=0.05)
+
+
+def test_loyalty_tier_is_stable_per_guest():
+    """The same guest always has the same tier, in every event and every run."""
+    by_guest = {}
+    for event in take(5000):
+        tier = by_guest.setdefault(event.data.guest_ref, event.data.loyalty_tier)
+        assert tier == event.data.loyalty_tier
+    tiers = [loyalty_tier(n) for n in range(1, 20001)]
+    assert 0.03 < tiers.count("gold") / len(tiers) < 0.07
+
+
+def test_demand_is_calibrated_to_the_business_occupancy():
+    """With 4,000 rooms, 68% occupancy and 50% F2 share, F2 creates ~700 bookings a day."""
+    gap = mean_minutes_between_bookings()
+    assert 1.5 < gap < 2.5
+    events = take(20000, out_of_order_rate=0)
+    created = [e for e in events if e.event_type == "reservation.created"]
+    days = (created[-1].occurred_at - created[0].occurred_at).total_seconds() / 86400
+    assert 550 < len(created) / days < 900
+
+
+def test_bigger_hotels_receive_more_bookings():
+    """Hotels are chosen in proportion to their rooms, not round-robin."""
+    created = [e for e in take(30000, out_of_order_rate=0) if e.event_type == "reservation.created"]
+    counts = defaultdict(int)
+    for event in created:
+        counts[event.hotel_id] += 1
+    biggest = max(HOTEL_IDS, key=lambda code: HOTEL_BY_CODE[code]["rooms"])
+    smallest = min(HOTEL_IDS, key=lambda code: HOTEL_BY_CODE[code]["rooms"])
+    assert counts[biggest] > counts[smallest]
+
+
+def test_demand_surge_concentrates_bookings_in_the_event_window():
+    """A surge (e.g. a high-category event) adds bookings for that hotel and those dates."""
+    surge = DemandSurge.parse("HP-PT-003:2026-10-20:2026-10-26:3.0")
+
+    def bookings_in_window(**kwargs):
+        return sum(
+            1
+            for e in take(20000, out_of_order_rate=0, **kwargs)
+            if e.event_type == "reservation.created"
+            and e.hotel_id == surge.hotel_id
+            and surge.start.isoformat() <= e.data.check_in <= surge.end.isoformat()
+        )
+
+    assert bookings_in_window(surges=[surge]) > 1.5 * bookings_in_window()
+
+
+def test_invalid_surge_is_rejected():
+    with pytest.raises(ValueError):
+        DemandSurge.parse("HP-XX-999:2026-10-20:2026-10-26:2.0")
+    with pytest.raises(ValueError):
+        DemandSurge.parse("HP-PT-001:2026-10-26:2026-10-20:2.0")
