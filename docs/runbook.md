@@ -40,7 +40,7 @@ In another terminal:
 python -m src.kafka_consumer
 ```
 
-The validation consumer checks the schema and logs safe metadata. It does not write to Neon or S3.
+The validation consumer checks the schema and logs safe metadata. It does not write anything.
 
 ## Run the Neon ledger consumer
 

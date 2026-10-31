@@ -9,12 +9,11 @@
   <img alt="Python 3.12+" src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white" />
   <img alt="Apache Kafka" src="https://img.shields.io/badge/Streaming-Apache%20Kafka-231F20?logo=apachekafka&logoColor=white" />
   <img alt="PostgreSQL / Neon" src="https://img.shields.io/badge/OLTP-Neon%20%7C%20PostgreSQL-00E699?logo=postgresql&logoColor=white" />
-  <img alt="Amazon S3" src="https://img.shields.io/badge/Lakehouse%20landing-Amazon%20S3-569A31?logo=amazons3&logoColor=white" />
   <img alt="Docker Compose" src="https://img.shields.io/badge/Local%20environment-Docker%20Compose-2496ED?logo=docker&logoColor=white" />
 </p>
 
 > [!IMPORTANT]
-> **Status: active development.** The default branch contains the Kafka producer, versioned event contract, validation consumer, and an isolated Neon event-ledger sink. Live Neon persistence, S3 persistence, production retry/dead-letter behavior, and cloud deployment must not be considered complete until their migrations, integration tests, and runtime checks have been executed and reviewed.
+> **Status: active development.** The default branch contains the Kafka producer, versioned event contract, validation consumer, and an isolated Neon event-ledger sink. Live Neon persistence, production retry behavior, and cloud deployment must not be considered complete until their migrations, integration tests, and runtime checks have been executed and reviewed.
 
 ## Project overview
 
@@ -43,13 +42,12 @@ flowchart LR
     B --> C["Apache Kafka<br/>reservation.events.v1_3"]
     C --> D["Kafka validation consumer"]
     C -. "independent consumer group" .-> E["Neon PostgreSQL<br/>event ledger"]
-    C -. "independent consumer group" .-> F["Amazon S3<br/>Bronze JSONL (gzip)"]
     C -. "invalid messages" .-> X["Kafka DLQ<br/>reservation.events.dlq"]
     E --> G["Operational event projection"]
-    F --> H["Analytics / lakehouse pipeline"]
+    E -. "incremental extraction (worker bronze, Airflow)" .-> F["Amazon S3 Bronze<br/>lakehouse"]
 ```
 
-Solid lines represent the current producer and validation path. The Neon consumer and sink are implemented separately but still require live integration verification. S3 persistence and cloud deployment remain pending.
+Solid lines represent the current producer and validation path. The Neon consumer and sink are implemented separately but still require live integration verification. Kafka has a single storage sink, Neon: the lakehouse receives F2 events when the Airflow worker bronze extracts `reservation_event_ledger` from Neon into S3 Bronze, like the other Neon tables. Cloud deployment remains pending.
 
 ## Event lifecycle
 
@@ -76,7 +74,7 @@ The F2 `reservation_id` is not the integer primary key of F3's reservations tabl
 | Pydantic 2 | Event schema validation |
 | Apache Kafka / `confluent-kafka` | Streaming producer and consumers |
 | PostgreSQL on Neon | Intended OLTP event ledger |
-| Amazon S3 | Planned raw Bronze landing destination |
+| Amazon S3 | Lakehouse Bronze, fed from Neon by the Airflow worker bronze (outside this repository) |
 | Docker Compose | Local Kafka environment |
 | pytest and Ruff | Tests, linting, and formatting |
 | GitHub Actions | Continuous integration |
@@ -173,7 +171,7 @@ In a second terminal with the virtual environment activated:
 python -m src.kafka_consumer
 ```
 
-The validation consumer parses events with Pydantic and logs safe metadata. It does not persist to Neon or S3. Invalid messages remain uncommitted and stop the current consumer; a production retry/dead-letter workflow remains a required acceptance item.
+The validation consumer parses events with Pydantic and logs safe metadata. It does not persist anything. Invalid messages remain uncommitted and stop the current consumer; a production retry/dead-letter workflow remains a required acceptance item.
 
 ### 6. Run the Neon ledger consumer (optional)
 
@@ -189,17 +187,7 @@ The consumer commits a Kafka offset only after the Neon transaction succeeds. Du
 
 **Live Neon persistence has not been verified in this session.** Do not claim it is operational until the migration, connection, and integration behavior are verified.
 
-### 7. Land raw events in S3 Bronze (optional)
-
-Set `BRONZE_BUCKET` (and optionally `BRONZE_KMS_KEY_ID`) in `.env`. AWS credentials come from your AWS CLI profile locally or from the ECS task role in AWS. Then run:
-
-```powershell
-python -m src.bronze_consumer
-```
-
-Every 5 minutes (`BRONZE_FLUSH_SECONDS`) it writes one gzip JSON Lines object per partition to `s3://<bucket>/bronze/f2_reservation_events/ingest_date=YYYY-MM-DD/hour=HH/` and commits offsets only after S3 confirms the write. Duplicates after a replay are removed in Silver by `event_id`.
-
-### 8. Run quality checks
+### 7. Run quality checks
 
 ```powershell
 ruff check .
@@ -213,20 +201,20 @@ Record actual command results for each change; do not mark checks as passing wit
 
 The `.env.example` file contains Kafka settings and an optional Neon URL placeholder. Store credentials only in local untracked environment files or the approved deployment secret manager.
 
-## Neon and S3 integration
+## Neon and lakehouse integration
 
-The target design has independent sink paths:
+Kafka has one storage sink:
 
-1. **Neon OLTP:** persist the immutable event in a ledger and commit its Kafka offset only after the database transaction succeeds.
-2. **S3 Bronze:** preserve raw validated event records in partitioned objects and commit offsets only after the object write is confirmed.
+1. **Neon OLTP:** persist the immutable event in `reservation_event_ledger` and commit its Kafka offset only after the database transaction succeeds.
+2. **Lakehouse:** the Airflow worker bronze extracts new ledger rows incrementally (by `received_at`) from Neon into S3 Bronze. That job lives in the data-platform repository, not here.
 
-S3 persistence is implemented in `src/bronze_consumer.py` (unit tested; live AWS verification pending). Before production use, validate schema migration, permissions, idempotency, replay behavior, retries, dead-letter handling, and monitoring.
+Before production use, validate the schema migration, permissions, idempotency, replay behavior, retries, dead-letter handling, and monitoring.
 
 ## Security and privacy
 
 - Use synthetic reservation data only.
 - Never commit guest names, contact details, payment data, credentials, or real connection strings.
-- Use least-privilege roles for Kafka, Neon, and S3.
+- Use least-privilege roles for Kafka and Neon.
 - Redact secrets from logs and error reports.
 - Rotate any credential that may have been exposed; deleting it from the latest file does not remove it from Git history.
 
@@ -238,7 +226,6 @@ S3 persistence is implemented in `src/bronze_consumer.py` (unit tested; live AWS
 | `src/kafka_producer.py` | Kafka event publisher |
 | `src/kafka_consumer.py` | Kafka validation consumer |
 | `src/neon_consumer.py` | Independent consumer for Neon event-ledger persistence |
-| `src/bronze_consumer.py` | Independent consumer that lands raw events in S3 Bronze |
 | `src/neon_sink.py` | Idempotent Neon event-ledger persistence |
 | `docker-compose.kafka.yml` | Local Kafka environment |
 | `docs/event-contract.md` | Versioned event contract and mapping constraints |
@@ -257,8 +244,7 @@ S3 persistence is implemented in `src/bronze_consumer.py` (unit tested; live AWS
 - [ ] Run Kafka broker integration tests from a clean environment.
 - [ ] Review and apply the Neon event-ledger migration through the approved process.
 - [ ] Verify live Neon persistence with integration tests.
-- [x] Implement and unit test S3 Bronze persistence.
-- [ ] Verify S3 Bronze persistence against the real bucket.
+- [x] Single storage path: Kafka → Neon ledger; the lakehouse reads the ledger from Neon.
 - [x] Dead-letter topic for invalid messages in the Neon consumer.
 - [ ] Apply the inventory projection (`reservar()` / `liberar()`) in the same transaction as the ledger insert.
 - [ ] Validate replay, idempotency, and offset behavior end to end.
@@ -266,7 +252,7 @@ S3 persistence is implemented in `src/bronze_consumer.py` (unit tested; live AWS
 
 ## Definition of done
 
-Production readiness requires passing automated checks, an agreed event contract, verified Neon and S3 persistence, secure credential management, demonstrated failure recovery, and documented deployment and monitoring ownership. Until then, this project remains in development.
+Production readiness requires passing automated checks, an agreed event contract, verified Neon persistence, secure credential management, demonstrated failure recovery, and documented deployment and monitoring ownership. Until then, this project remains in development.
 
 ---
 

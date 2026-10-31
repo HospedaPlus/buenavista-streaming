@@ -1,7 +1,7 @@
 """Consume and validate reservation events from Apache Kafka.
 
-The current processor logs validated event metadata only. Neon and S3 writes
-will be implemented as independent sink consumers in a later migration step.
+The current processor logs validated event metadata only. Storage is handled
+by the Neon ledger consumer (src/neon_consumer.py); the lakehouse reads Neon.
 """
 
 import logging
