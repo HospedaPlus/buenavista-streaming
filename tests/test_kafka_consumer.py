@@ -42,7 +42,7 @@ def test_consumer_polls_with_bounded_wait_and_commits_after_processing(
     kafka_consumer.consume_events()
 
     consumer.poll.assert_called_once_with(kafka_consumer.POLL_TIMEOUT_SECONDS)
-    consumer.subscribe.assert_called_once_with(["reservation.events.v1_2"])
+    consumer.subscribe.assert_called_once_with(["reservation.events.v1_3"])
     consumer.commit.assert_called_once_with(message=message, asynchronous=False)
     assert actions == ["process", "commit", "close"]
 

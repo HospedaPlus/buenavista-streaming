@@ -34,14 +34,14 @@ def test_persist_returns_true_for_a_new_event(database_mocks):
     cursor.fetchone.return_value = (str(event.event_id),)
     sink = NeonEventSink("postgresql://example.invalid/test")
 
-    inserted = sink.persist(event, "reservation.events.v1_2", 1, 25)
+    inserted = sink.persist(event, "reservation.events.v1_3", 1, 25)
 
     assert inserted is True
     assert cursor.execute.call_count == 1
     sql, params = cursor.execute.call_args.args
     assert "INSERT INTO public.reservation_event_ledger" in sql
     assert params[0] == str(event.event_id)
-    assert params[-3:] == ("reservation.events.v1_2", 1, 25)
+    assert params[-3:] == ("reservation.events.v1_3", 1, 25)
 
 
 def test_persist_accepts_a_duplicate_with_the_same_payload(database_mocks):
@@ -52,7 +52,7 @@ def test_persist_accepts_a_duplicate_with_the_same_payload(database_mocks):
     cursor.fetchone.side_effect = [None, (payload,)]
     sink = NeonEventSink("postgresql://example.invalid/test")
 
-    inserted = sink.persist(event, "reservation.events.v1_2", 0, 7)
+    inserted = sink.persist(event, "reservation.events.v1_3", 0, 7)
 
     assert inserted is False
     assert cursor.execute.call_count == 2
@@ -66,4 +66,4 @@ def test_persist_rejects_event_id_reuse_with_a_different_payload(database_mocks)
     sink = NeonEventSink("postgresql://example.invalid/test")
 
     with pytest.raises(ValueError, match="different payload"):
-        sink.persist(event, "reservation.events.v1_2", 0, 8)
+        sink.persist(event, "reservation.events.v1_3", 0, 8)

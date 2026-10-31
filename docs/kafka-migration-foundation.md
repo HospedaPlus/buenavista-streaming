@@ -10,7 +10,7 @@ Buenavista Streaming uses Apache Kafka as its only supported message broker. Eve
 db_simulated seed ─┐
                    ├─> producer + Pydantic validation ─> Apache Kafka
 Project APIs ──────┘                                  │
-                                      topic: reservation.events.v1_2
+                                      topic: reservation.events.v1_3
                                                      │
                                ┌─────────────────────┴────────────────────┐
                                v                                          v
@@ -23,7 +23,7 @@ Project APIs ──────┘                                  │
 ## Design rules
 
 1. Keep `db_simulated` as the canonical source for hotel, room-type, channel, and other seeded catalog values.
-2. Start with `reservation.events.v1_2`. Add other topics only when their event contracts and producers are ready.
+2. Start with `reservation.events.v1_3`. Add other topics only when their event contracts and producers are ready.
 3. Keep Neon and S3 as independent consumer groups so a failure in one sink does not directly stop the other.
 4. Design consumers for at-least-once delivery, idempotent writes, bounded retries, and recoverable failures. Do not claim exactly-once writes across multiple systems.
 5. Commit consumer offsets only after the corresponding sink write succeeds.
@@ -44,7 +44,7 @@ docker compose -f docker-compose.kafka.yml ps
 Create the initial topic:
 
 ```powershell
-docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic reservation.events.v1_2 --partitions 3 --replication-factor 1
+docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic reservation.events.v1_3 --partitions 3 --replication-factor 1
 ```
 
 Inspect topics:

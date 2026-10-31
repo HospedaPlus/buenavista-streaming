@@ -23,8 +23,11 @@ pytest
 ## Create the topic and publish test events
 
 ```powershell
-docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic reservation.events.v1_2 --partitions 3 --replication-factor 1
+docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic reservation.events.v1_3 --partitions 3 --replication-factor 1
+docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic reservation.events.dlq --partitions 1 --replication-factor 1
 python -m src.kafka_producer --count 20 --seed 42
+# continuous stream with peaks (Ctrl+C to stop)
+python -m src.kafka_producer --continuous --duration 120
 ```
 
 The local Kafka broker uses a single node and replication factor one; this is for development only.
@@ -52,10 +55,10 @@ Live Neon persistence must be verified before treating the sink as operational.
 ## Troubleshooting
 
 - **Connection refused:** inspect `docker compose -f docker-compose.kafka.yml ps` and the broker logs; confirm port 9092.
-- **Topic not found:** create `reservation.events.v1_2` with the command above.
+- **Topic not found:** create `reservation.events.v1_3` with the command above.
 - **Duplicate events:** use `event_id` as the idempotency key and `reservation_version` for ordering.
 - **Database failure:** do not commit the Kafka offset until the destination transaction succeeds.
-- **Invalid event:** current validation consumer leaves the offset uncommitted; a production retry/dead-letter workflow remains pending.
+- **Invalid event:** the validation consumer stops on it; the Neon consumer copies it to `reservation.events.dlq` and continues. Create that topic like the main one.
 
 ## Stop Kafka
 

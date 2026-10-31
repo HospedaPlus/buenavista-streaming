@@ -10,7 +10,7 @@ The additive DDL is in `migrations/001_create_reservation_event_ledger.sql`. It 
 
 ## Source-of-truth catalog
 
-The F2 generator uses the pinned canonical catalog at `catalog/catalog.json`, currently version `1.1.0`. See `catalog/README.md`. Event schema version is `1.2`.
+The F2 generator uses the pinned canonical catalog at `catalog/catalog.json`, currently version `1.1.0`. See `catalog/README.md`. Event schema version is `1.3`.
 
 ## Required transactional processing
 
@@ -28,7 +28,7 @@ A failure before database commit must roll back both ledger and operational chan
 
 ## Mapping gates before implementing operational writes
 
-The current F2 contract intentionally contains no guest identifiers, while F3 `reservations.guest_id` is mandatory and references `guests.id`. The team must approve one of these approaches before the sink writes operational reservations:
+Contract 1.3 adds a synthetic `guest_ref` (`G-NNNNNNN`) and `loyalty_tier`, which follows the first option below; the F3 seed must provision guests with the same codes and tiers. Contract 1.3 also adds `nightly_rate`, which gives the first-night amount. Before 1.3 the F2 contract contained no guest identifiers, while F3 `reservations.guest_id` is mandatory and references `guests.id`. The team must approve one of these approaches before the sink writes operational reservations:
 - add a stable synthetic guest reference to the event contract and provision that guest through an approved synthetic-data process; or
 - retain events in the ledger and defer operational projection until an upstream guest identity mapping is available.
 
