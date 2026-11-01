@@ -46,4 +46,4 @@ F2 emits whole-stay `total_amount`; F3 separately stores `first_night_amount` an
 - Use a local `.env` file or approved secret manager for Neon credentials. Never log or commit secrets.
 - Test against an isolated development branch before `production`.
 - Do not modify RabbitMQ configuration, queues, or Docker volumes as part of the Neon sink work.
-- S3 delivery remains a separate sink and requires a verified bucket and access policy.
+- The lakehouse does not read Kafka: the Airflow worker bronze extracts `reservation_event_ledger` from Neon into S3 Bronze incrementally by `received_at`.
