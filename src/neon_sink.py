@@ -79,7 +79,7 @@ class NeonEventSink:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    INSERT INTO public.reservation_event_ledger (
+                    INSERT INTO streaming.reservation_event_ledger (
                         event_id, reservation_id, reservation_version,
                         schema_version, source, event_type, occurred_at,
                         payload, kafka_topic, kafka_partition, kafka_offset
@@ -110,7 +110,7 @@ class NeonEventSink:
                     cursor.execute(
                         """
                         SELECT payload
-                        FROM public.reservation_event_ledger
+                        FROM streaming.reservation_event_ledger
                         WHERE event_id = %s
                         """,
                         (str(event.event_id),),

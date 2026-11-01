@@ -2,7 +2,11 @@
 -- This migration does not alter the existing F3 operational tables.
 BEGIN;
 
-CREATE TABLE IF NOT EXISTS reservation_event_ledger (
+-- Run as the schema owner (hospedaplus_owner). The schema and the app_writer / etl_reader
+-- roles are created beforehand; their default privileges cover this table.
+CREATE SCHEMA IF NOT EXISTS streaming;
+
+CREATE TABLE IF NOT EXISTS streaming.reservation_event_ledger (
     event_id UUID PRIMARY KEY,
     reservation_id VARCHAR(80) NOT NULL,
     reservation_version BIGINT NOT NULL,
@@ -29,9 +33,9 @@ CREATE TABLE IF NOT EXISTS reservation_event_ledger (
 );
 
 CREATE INDEX IF NOT EXISTS idx_reservation_event_history
-    ON reservation_event_ledger (reservation_id, reservation_version DESC);
+    ON streaming.reservation_event_ledger (reservation_id, reservation_version DESC);
 
 CREATE INDEX IF NOT EXISTS idx_reservation_event_received_at
-    ON reservation_event_ledger (received_at);
+    ON streaming.reservation_event_ledger (received_at);
 
 COMMIT;
