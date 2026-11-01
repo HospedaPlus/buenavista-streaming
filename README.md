@@ -197,6 +197,28 @@ pytest
 
 Record actual command results for each change; do not mark checks as passing without evidence.
 
+## Run everything with Docker (one command)
+
+`docker-compose.yml` starts the whole F2 flow: Kafka, topic creation, the Neon migration, the continuous producer and the Kafka → Neon consumer.
+
+1. Copy `.env.example` to `.env` and fill in two Neon connection URLs (never commit them):
+   - `NEON_DATABASE_URL`: the `app_writer` user. The consumer writes with it.
+   - `NEON_OWNER_URL`: the `hospedaplus_owner` user. It is used only to apply `migrations/*.sql`, which are idempotent.
+2. Start it:
+
+```bash
+docker compose up -d --build
+docker compose ps -a        # kafka-init and neon-migrate end as "Exited (0)"; producer and neon-consumer stay "Up"
+docker compose logs -f neon-consumer
+```
+
+3. Check Neon: `SELECT event_type, count(*) FROM streaming.reservation_event_ledger GROUP BY 1;`
+4. Stop it with `docker compose stop`. Use `docker compose down -v` to also delete the local Kafka data.
+
+The same image (`Dockerfile`) is what you deploy to AWS: one ECS Fargate service for `neon-consumer` and another for `producer`, both pointing at MSK through `KAFKA_BOOTSTRAP_SERVERS`, with the Neon URLs stored in Secrets Manager.
+
+`docker-compose.kafka.yml` remains available when you only want the broker.
+
 ## Configuration
 
 The `.env.example` file contains Kafka settings and an optional Neon URL placeholder. Store credentials only in local untracked environment files or the approved deployment secret manager.
