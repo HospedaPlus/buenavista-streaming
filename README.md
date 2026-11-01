@@ -1,280 +1,410 @@
-# 🏨 HospedaPlus | Hotel Reservation Streaming Platform
+# 🏨 HospedaPlus | Buenavista Streaming (F2)
 
 <p align="center">
-  <strong>Real-time reservation event processing for the HospedaPlus data platform.</strong><br/>
-  <em>HospedaPlus · Data Engineering · F2 Channel-Manager Simulation</em>
+  <strong>Synthetic hotel-reservation event stream: Kafka → Neon PostgreSQL.</strong><br/>
+  <em>HospedaPlus · Data Engineering · F2 Channel-Manager Source</em>
 </p>
 
 <p align="center">
   <img alt="Python 3.12+" src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white" />
   <img alt="Apache Kafka" src="https://img.shields.io/badge/Streaming-Apache%20Kafka-231F20?logo=apachekafka&logoColor=white" />
   <img alt="PostgreSQL / Neon" src="https://img.shields.io/badge/OLTP-Neon%20%7C%20PostgreSQL-00E699?logo=postgresql&logoColor=white" />
-  <img alt="Docker Compose" src="https://img.shields.io/badge/Local%20environment-Docker%20Compose-2496ED?logo=docker&logoColor=white" />
+  <img alt="Docker Compose" src="https://img.shields.io/badge/Run-Docker%20Compose-2496ED?logo=docker&logoColor=white" />
 </p>
 
-> [!IMPORTANT]
-> **Status: active development.** The default branch contains the Kafka producer, versioned event contract, validation consumer, and an isolated Neon event-ledger sink. Live Neon persistence, production retry behavior, and cloud deployment must not be considered complete until their migrations, integration tests, and runtime checks have been executed and reviewed.
+## Contents
 
-## Project overview
+1. [What this project does](#what-this-project-does)
+2. [Project status](#project-status)
+3. [Architecture](#architecture)
+4. [Run it with Docker (recommended)](#run-it-with-docker-recommended)
+5. [See what it is doing](#see-what-it-is-doing)
+6. [Stop, restart and reset](#stop-restart-and-reset)
+7. [Troubleshooting](#troubleshooting)
+8. [Configuration](#configuration)
+9. [Event contract](#event-contract)
+10. [Local development without Docker](#local-development-without-docker)
+11. [Deploying to AWS](#deploying-to-aws)
+12. [Repository guide](#repository-guide)
+13. [Security and privacy](#security-and-privacy)
+14. [Roadmap](#roadmap)
 
-Buenavista Streaming is the synthetic **F2 channel-manager event source** for the HospedaPlus data platform. It creates realistic, schema-validated reservation lifecycle events for a simulated hospitality portfolio and publishes them to Apache Kafka.
+## What this project does
 
-The system is Kafka-first. Kafka is the sole message broker supported by this repository; legacy broker implementations and configuration are not part of the maintained application.
-
-### Hospitality context
+Buenavista Streaming simulates **F2, the channel-manager source** of the HospedaPlus data platform. It generates realistic reservation lifecycle events for 28 hotels (4,000 rooms in five countries). It publishes them to Apache Kafka, and a consumer stores every event in **Neon PostgreSQL**.
 
 | Dimension | Definition |
 | --- | --- |
-| Business domain | Hotel reservations and channel-manager activity |
-| Simulated portfolio | 28 hotels across five countries; 4,000 rooms |
-| Source domain | F2 — channel-manager events |
-| Event format | Versioned JSON validated with Pydantic |
-| Current event contract | **1.3** |
-| Canonical reference data | Pinned catalog from `HospedaPlus/db_simulated` |
-| Privacy | Synthetic data only; no direct guest identifiers or payment data |
-| Main branch | `main` |
+| Business domain | Hotel reservations from OTAs and other channels |
+| Event types | created, updated, cancelled, no-show, checked-in, checked-out |
+| Throughput | Continuous: 5 events/s, with a 15 events/s peak for 10 s every minute |
+| Demand model | Calibrated to 68% occupancy and a 50% OTA share; optional demand surges |
+| Realism | Multiple modifications, late cancellations, no-shows, ~5% out-of-order events |
+| Event format | Versioned JSON (contract **1.3**) validated with Pydantic |
+| Storage | `streaming.reservation_event_ledger` in Neon (idempotent, one row per event) |
+| Reproducibility | Same `--seed` → same events |
+| Privacy | Synthetic data only; pseudonymous guest reference, no names, contact details or payment data |
+
+## Project status
+
+| Component | Status |
+| --- | --- |
+| Event generator and contract 1.3 | ✅ Done, covered by tests |
+| Kafka producer (batch and continuous, `acks=all`, idempotent) | ✅ Done |
+| Kafka → Neon consumer, with DLQ for invalid messages | ✅ Done, verified against Neon (dev branch) |
+| One-command Docker environment | ✅ Done |
+| Inventory projection (`reservar()` / `liberar()`) in Neon | ⏳ Pending: needs the F3 inventory tables |
+| Cloud deployment (MSK + ECS Fargate) | ⏳ Pending |
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    A["Synthetic F2 event generator"] --> B["Pydantic validation"]
-    B --> C["Apache Kafka<br/>reservation.events.v1_3"]
-    C --> D["Kafka validation consumer"]
-    C -. "independent consumer group" .-> E["Neon PostgreSQL<br/>event ledger"]
-    C -. "invalid messages" .-> X["Kafka DLQ<br/>reservation.events.dlq"]
-    E --> G["Operational event projection"]
-    E -. "incremental extraction (worker bronze, Airflow)" .-> F["Amazon S3 Bronze<br/>lakehouse"]
+    P["producer<br/>synthetic F2 events"] --> K["Apache Kafka<br/>reservation.events.v1_3"]
+    K --> C["neon-consumer"]
+    C --> N["Neon PostgreSQL<br/>streaming.reservation_event_ledger"]
+    C -. "invalid messages" .-> D["Kafka DLQ<br/>reservation.events.dlq"]
+    N -. "incremental extraction<br/>(Airflow worker bronze, other repo)" .-> S["Amazon S3 Bronze"]
 ```
 
-Solid lines represent the current producer and validation path. The Neon consumer and sink are implemented separately but still require live integration verification. Kafka has a single storage sink, Neon: the lakehouse receives F2 events when the Airflow worker bronze extracts `reservation_event_ledger` from Neon into S3 Bronze, like the other Neon tables. Cloud deployment remains pending.
+- **One storage path.** Kafka writes only to Neon. The lakehouse gets F2 when the Airflow worker bronze extracts new ledger rows from Neon into S3, the same way it extracts the other Neon tables.
+- **Ordering.** The Kafka key is `reservation_id`, so all events of one reservation stay in one partition, in order.
+- **No data loss.** The consumer commits the Kafka offset only after Neon confirms the insert. Replays are safe because the `event_id` is the primary key.
+- **Least privilege in Neon.** The consumer writes as `app_writer`, which cannot change the schema. Only the owner role (`hospedaplus_owner`) applies migrations. Analytics reads as `etl_reader`, which is read-only.
 
-## Event lifecycle
+## Run it with Docker (recommended)
 
-The simulator supports six reservation event types:
+One command starts the whole flow:
+
+| Service | What it does | Expected state |
+| --- | --- | --- |
+| `kafka` | Local Kafka broker | `Up (healthy)` |
+| `kafka-init` | Creates the topic and the DLQ topic | `Exited (0)` (runs once) |
+| `neon-migrate` | Applies `migrations/*.sql` to Neon as the owner | `Exited (0)` (runs once) |
+| `producer` | Publishes the continuous event stream | `Up` |
+| `neon-consumer` | Reads Kafka and writes to Neon | `Up` |
+
+### Prerequisites
+
+- **Docker Desktop**, with "Engine running". On Windows it needs WSL 2.
+- **Git.**
+- **A Neon project** with the `streaming` schema and the `app_writer` role already created by the team's roles script. Use the **dev** branch for testing.
+
+### Step 1 · Clone the repository
+
+```bash
+git clone https://github.com/HospedaPlus/buenavista-streaming.git
+cd buenavista-streaming
+```
+
+### Step 2 · Create your `.env` file
+
+```powershell
+copy .env.example .env      # Windows PowerShell
+# cp .env.example .env      # macOS / Linux
+```
+
+Open `.env` and fill in the two Neon URLs. To find them, open the Neon console, click **Connect**, choose the branch (`dev`), and choose the role:
+
+```dotenv
+NEON_DATABASE_URL=postgresql://app_writer:<password>@<host>/neondb?sslmode=require
+NEON_OWNER_URL=postgresql://hospedaplus_owner:<password>@<host>/neondb?sslmode=require
+```
+
+> `.env` is in `.gitignore`. Never commit it, and never paste these URLs in chats or issues.
+
+### Step 3 · Start everything
+
+```bash
+docker compose up -d --build
+```
+
+The first run downloads images and builds the app, which takes about 1–3 minutes. After that, the stack starts in seconds and keeps running in the background. Containers restart automatically if they crash or if Docker restarts.
+
+## See what it is doing
+
+### 1. Check that every service is in the right state
+
+```bash
+docker compose ps -a
+```
+
+`kafka-init` and `neon-migrate` must show `Exited (0)`, because they did their job and stopped. `producer` and `neon-consumer` must show `Up`.
+
+### 2. Watch it live
+
+```bash
+docker compose logs -f producer neon-consumer
+```
+
+You should see:
+
+```text
+producer-1       | INFO Streaming progress: sent=303 peak=15 ev/s (best full second)
+neon-consumer-1  | INFO __main__ Neon ledger write confirmed event_id=... inserted=True topic=reservation.events.v1_3 partition=1 offset=109
+```
+
+- `peak=15 ev/s` is the evidence for the "≥ 10 events per second at peak" requirement.
+- `inserted=True` means the event was stored in Neon. `inserted=False` means it already existed, which is the expected behavior on a replay.
+
+Press `Ctrl + C` to stop watching. The containers keep running.
+
+Other useful logs:
+
+```bash
+docker compose logs neon-migrate        # migration output
+docker compose logs kafka-init          # topic creation
+docker compose logs --tail 50 neon-consumer
+```
+
+### 3. Look at the data in Neon
+
+Open the Neon console, go to the **SQL Editor**, and select the **dev** branch.
+
+Events per type (run it again a minute later and the counts grow):
+
+```sql
+SELECT event_type, count(*) AS events
+FROM streaming.reservation_event_ledger
+GROUP BY event_type
+ORDER BY events DESC;
+```
+
+Latest events:
+
+```sql
+SELECT received_at, event_type, reservation_id, payload->>'hotel_id' AS hotel_id
+FROM streaming.reservation_event_ledger
+ORDER BY received_at DESC
+LIMIT 20;
+```
+
+Full history of one reservation, including its modifications:
+
+```sql
+SELECT reservation_version, event_type, occurred_at, payload->'data' AS data
+FROM streaming.reservation_event_ledger
+WHERE reservation_id = '<paste a reservation_id>'
+ORDER BY reservation_version;
+```
+
+Ingestion rate over the last 10 minutes:
+
+```sql
+SELECT date_trunc('minute', received_at) AS minute, count(*) AS events
+FROM streaming.reservation_event_ledger
+WHERE received_at > now() - interval '10 minutes'
+GROUP BY 1
+ORDER BY 1;
+```
+
+You can also browse the data under **Tables**, by choosing the `streaming` schema and then `reservation_event_ledger`.
+
+> In continuous mode the simulated clock runs about 4–5 minutes ahead per real second. Check-ins happen days after a booking, so check-in and check-out events appear after the stack has been running for a while.
+
+### 4. Look inside Kafka (optional)
+
+Read the first three messages of the topic:
+
+```bash
+docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic reservation.events.v1_3 --from-beginning --max-messages 3
+```
+
+Check the consumer lag. A `LAG` close to 0 means the consumer keeps up:
+
+```bash
+docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group buenavista-neon-ledger
+```
+
+Check whether any message went to the DLQ. It should be empty:
+
+```bash
+docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic reservation.events.dlq --from-beginning --timeout-ms 5000
+```
+
+## Stop, restart and reset
+
+| Goal | Command |
+| --- | --- |
+| Pause everything (keeps data) | `docker compose stop` |
+| Resume | `docker compose start` |
+| Restart one service | `docker compose restart neon-consumer` |
+| Rebuild after pulling new code | `docker compose up -d --build` |
+| Remove containers, keep Kafka data | `docker compose down` |
+| Remove everything, including local Kafka data | `docker compose down -v` |
+
+`down -v` deletes only the local Kafka messages. The rows already stored in Neon stay there. To empty the ledger in dev, run `TRUNCATE streaming.reservation_event_ledger;` as `hospedaplus_owner`.
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+| --- | --- |
+| `Falta NEON_DATABASE_URL` or `Falta NEON_OWNER_URL` | `.env` is missing or one URL is empty. Fill in both (step 2). |
+| `neon-migrate` shows `Exited (1)` | Run `docker compose logs neon-migrate`. Usually the owner URL is wrong, or the password changed. |
+| `permission denied for schema streaming` | The roles script was not run on this Neon branch. Run it as `hospedaplus_owner` on that branch. |
+| `role "..." does not exist` | The URL uses a role that does not exist on that branch. Check it under **Roles** in Neon. |
+| `producer` or `neon-consumer` keeps restarting | Run `docker compose logs <service>`. If Kafka is still starting, wait 30 s. |
+| `Coordinator load in progress: retrying` | Normal on a freshly started Kafka. It resolves by itself. |
+| Port 9092 already in use | Another Kafka is running. Stop it, or run `docker compose -f docker-compose.kafka.yml down`. |
+| Docker Desktop does not start (Windows) | Enable WSL 2 and reboot. |
+
+When you ask for help, share the log lines, but remove URLs and passwords first.
+
+## Configuration
+
+All settings come from environment variables. The `docker-compose.yml` file already sets the Kafka values for containers. `.env` only needs the Neon URLs.
+
+| Variable | Default | Used by |
+| --- | --- | --- |
+| `NEON_DATABASE_URL` | none (required) | `neon-consumer`, connecting as `app_writer` |
+| `NEON_OWNER_URL` | none (required in Docker) | `neon-migrate`, connecting as `hospedaplus_owner` |
+| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` (`kafka:29092` inside Docker) | producer and consumers |
+| `KAFKA_RESERVATION_TOPIC` | `reservation.events.v1_3` | producer and consumers |
+| `KAFKA_DLQ_TOPIC` | `reservation.events.dlq` | `neon-consumer` |
+| `KAFKA_NEON_GROUP_ID` | `buenavista-neon-ledger` | `neon-consumer` |
+| `KAFKA_GROUP_ID` | `buenavista-validation-consumer` | validation consumer |
+| `LOG_LEVEL` | `INFO` | `neon-consumer` |
+
+### Producer options
+
+To change the stream, edit the `producer` service's `command` in `docker-compose.yml`, or run the producer locally (see below).
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--continuous` | off | Endless, paced stream |
+| `--count N` | 20 | Batch mode: send N events as fast as possible |
+| `--seed` | 42 | Random seed (reproducible output) |
+| `--base-rate` / `--peak-rate` | 5 / 15 | Events per second outside and during peaks |
+| `--peak-every` / `--peak-duration` | 60 / 10 | Seconds between peaks, and peak length |
+| `--duration` | none | Stop after N seconds |
+| `--occupancy` | 0.68 | Target occupancy used to size demand |
+| `--out-of-order-rate` | 0.05 | Share of events delivered out of order |
+| `--surge HOTEL:START:END:FACTOR` | none | Extra demand for one hotel and stay window, for example `HP-PT-003:2026-10-20:2026-10-26:3.0`. It can be repeated. |
+
+## Event contract
+
+Each message is a JSON document validated against contract **1.3**. The full specification, including F3 mapping rules, is in [`docs/event-contract.md`](docs/event-contract.md).
+
+```json
+{
+  "event_id": "8d95f529-...",
+  "schema_version": "1.3",
+  "source": "f2-channel-manager",
+  "event_type": "reservation.created",
+  "occurred_at": "2026-10-01T00:00:00Z",
+  "hotel_id": "HP-PT-003",
+  "reservation_id": "F2-RES-0042-00000000",
+  "reservation_version": 1,
+  "data": {
+    "check_in": "2026-10-07", "check_out": "2026-10-11", "room_type": "TWIN", "guests": 2,
+    "guest_ref": "G-0043854", "loyalty_tier": "silver", "nightly_rate": 139.04,
+    "total_amount": 556.16, "currency": "EUR", "status": "confirmed",
+    "channel_code": "booking_channel_b", "refundable": false
+  }
+}
+```
 
 | Event type | Meaning |
 | --- | --- |
 | `reservation.created` | A reservation is created |
-| `reservation.updated` | Reservation details are modified |
-| `reservation.cancelled` | A reservation is cancelled |
+| `reservation.updated` | Dates, room type or guests change; this can happen several times |
+| `reservation.cancelled` | A reservation is cancelled, possibly late |
 | `reservation.no_show` | The guest does not arrive |
-| `reservation.checked_in` | The guest checks in |
+| `reservation.checked_in` | The guest checks in (local hotel time) |
 | `reservation.checked_out` | The guest checks out |
 
-The contract includes a stable `event_id`, `schema_version`, `hotel_id`, `reservation_id`, and `reservation_version`. Consumers must deduplicate by event ID and reconcile lifecycle order using reservation version. See [`docs/event-contract.md`](docs/event-contract.md).
+Consumers deduplicate by `event_id` and reconcile order with `reservation_version`.
 
-The F2 `reservation_id` is not the integer primary key of F3's reservations table. F3 mappings and status translations must be explicitly approved; do not fabricate guest identifiers or financial values.
+## Local development without Docker
 
-## Technology stack
-
-| Technology | Responsibility |
-| --- | --- |
-| Python 3.12+ | Event generation and consumers |
-| Pydantic 2 | Event schema validation |
-| Apache Kafka / `confluent-kafka` | Streaming producer and consumers |
-| PostgreSQL on Neon | Intended OLTP event ledger |
-| Amazon S3 | Lakehouse Bronze, fed from Neon by the Airflow worker bronze (outside this repository) |
-| Docker Compose | Local Kafka environment |
-| pytest and Ruff | Tests, linting, and formatting |
-| GitHub Actions | Continuous integration |
-
-## Quick start
-
-### Prerequisites
-
-- Python 3.12 or newer
-- Git
-- Docker Desktop with Docker Compose v2
-- PowerShell, Bash, or Zsh
-
-### 1. Clone and install
+Use this to run the tests or to work on the code.
 
 **Windows PowerShell**
 
 ```powershell
-git clone https://github.com/HospedaPlus/buenavista-streaming.git
-cd buenavista-streaming
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
-Copy-Item .env.example .env
 ```
 
 **macOS / Linux**
 
 ```bash
-git clone https://github.com/HospedaPlus/buenavista-streaming.git
-cd buenavista-streaming
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
-cp .env.example .env
 ```
 
-Never commit real passwords, API keys, cloud credentials, or database connection URLs. Keep local `.env` files out of Git.
+Quality checks (CI runs the same ones):
 
-### 2. Start Kafka
-
-```powershell
-docker compose -f docker-compose.kafka.yml config
-docker compose -f docker-compose.kafka.yml up -d
-docker compose -f docker-compose.kafka.yml ps
-```
-
-Inspect logs if the broker does not become healthy:
-
-```powershell
-docker compose -f docker-compose.kafka.yml logs --tail 100
-```
-
-### 3. Create the reservation topic
-
-```powershell
-docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic reservation.events.v1_3 --partitions 3 --replication-factor 1
-docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic reservation.events.dlq --partitions 1 --replication-factor 1
-```
-
-The single-broker setup is for local development, not high availability.
-
-### 4. Publish events
-
-Bounded batch (sends 20 events as fast as possible and stops):
-
-```powershell
-python -m src.kafka_producer --count 20 --seed 42
-```
-
-Continuous stream (5 events/s, with a 15 events/s peak during the first 10 s of every minute; stop with Ctrl+C or `--duration`):
-
-```powershell
-python -m src.kafka_producer --continuous --duration 120
-```
-
-High-season simulation: extra demand for one hotel and stay window (repeat `--surge` for more hotels):
-
-```powershell
-python -m src.kafka_producer --continuous --surge HP-PT-003:2026-10-20:2026-10-26:3.0
-```
-
-Other options: `--base-rate`, `--peak-rate`, `--peak-every`, `--peak-duration`, `--occupancy` (default 0.68) and `--out-of-order-rate` (default 0.05). The producer logs the best events-per-second second it observed.
-
-The producer uses `reservation_id` as the Kafka message key, so all events of a reservation land in the same partition. It uses `acks=all` and idempotence. Successful delivery confirms broker acceptance, not downstream persistence.
-
-### 5. Run the validation consumer
-
-In a second terminal with the virtual environment activated:
-
-```powershell
-python -m src.kafka_consumer
-```
-
-The validation consumer parses events with Pydantic and logs safe metadata. It does not persist anything. Invalid messages remain uncommitted and stop the current consumer; a production retry/dead-letter workflow remains a required acceptance item.
-
-### 6. Run the Neon ledger consumer (optional)
-
-Before running this component, apply `migrations/001_create_reservation_event_ledger.sql` in the Neon SQL Editor **as the owner role** (`hospedaplus_owner`). It creates `streaming.reservation_event_ledger`. The consumer connects as `app_writer` (read/write on schemas `operation` and `streaming`, no DDL); the worker bronze reads as `etl_reader` (read-only).
-
-Set `NEON_DATABASE_URL` in an untracked local `.env` file or approved secret store, then run:
-
-```powershell
-python -m src.neon_consumer
-```
-
-The consumer commits a Kafka offset only after the Neon transaction succeeds. Duplicate event IDs with identical payloads are treated as already persisted; a conflicting payload for the same ID raises an error. Database failures leave the offset uncommitted for replay. Messages that fail validation are copied to `reservation.events.dlq` (with the error in a header) and the stream continues.
-
-**Live Neon persistence has not been verified in this session.** Do not claim it is operational until the migration, connection, and integration behavior are verified.
-
-### 7. Run quality checks
-
-```powershell
+```bash
 ruff check .
 ruff format --check .
 pytest
 ```
 
-Record actual command results for each change; do not mark checks as passing without evidence.
-
-## Run everything with Docker (one command)
-
-`docker-compose.yml` starts the whole F2 flow: Kafka, topic creation, the Neon migration, the continuous producer and the Kafka → Neon consumer.
-
-1. Copy `.env.example` to `.env` and fill in two Neon connection URLs (never commit them):
-   - `NEON_DATABASE_URL`: the `app_writer` user. The consumer writes with it.
-   - `NEON_OWNER_URL`: the `hospedaplus_owner` user. It is used only to apply `migrations/*.sql`, which are idempotent.
-2. Start it:
+To run the pieces by hand, start only the broker with `docker compose -f docker-compose.kafka.yml up -d` and create the topics. Then use one terminal per process:
 
 ```bash
-docker compose up -d --build
-docker compose ps -a        # kafka-init and neon-migrate end as "Exited (0)"; producer and neon-consumer stay "Up"
-docker compose logs -f neon-consumer
+python -m src.kafka_producer --continuous --duration 120   # producer
+python -m src.kafka_consumer                               # validation consumer (logs only, stores nothing)
+python -m src.neon_consumer                                # Kafka → Neon (needs NEON_DATABASE_URL in .env)
 ```
 
-3. Check Neon: `SELECT event_type, count(*) FROM streaming.reservation_event_ledger GROUP BY 1;`
-4. Stop it with `docker compose stop`. Use `docker compose down -v` to also delete the local Kafka data.
+To create the topics when you run without the full compose:
 
-The same image (`Dockerfile`) is what you deploy to AWS: one ECS Fargate service for `neon-consumer` and another for `producer`, both pointing at MSK through `KAFKA_BOOTSTRAP_SERVERS`, with the Neon URLs stored in Secrets Manager.
+```bash
+docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic reservation.events.v1_3 --partitions 3 --replication-factor 1
+docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic reservation.events.dlq --partitions 1 --replication-factor 1
+```
 
-`docker-compose.kafka.yml` remains available when you only want the broker.
+## Deploying to AWS
 
-## Configuration
+The `Dockerfile` builds one image that runs both the producer and the consumer, so the same artifact works locally and in the cloud.
 
-The `.env.example` file contains Kafka settings and an optional Neon URL placeholder. Store credentials only in local untracked environment files or the approved deployment secret manager.
+| Option | When to use it | How |
+| --- | --- | --- |
+| **A · Demo on EC2** | Fastest way to keep it running 24/7 | Launch a small EC2 instance (for example `t3.small`) and install Docker. Clone the repo, create `.env`, and run `docker compose up -d --build`. |
+| **B · Target architecture** | Final deployment (diagram v3) | Push the image to ECR. Create Amazon MSK and set `KAFKA_BOOTSTRAP_SERVERS` to its brokers. Run two ECS Fargate services, `producer` and `neon-consumer`, with the Neon URLs injected from AWS Secrets Manager. Apply migrations once as the owner, through a one-off task or the Neon SQL Editor. |
 
-## Neon and lakehouse integration
-
-Kafka has one storage sink:
-
-1. **Neon OLTP:** persist the immutable event in `reservation_event_ledger` and commit its Kafka offset only after the database transaction succeeds.
-2. **Lakehouse:** the Airflow worker bronze extracts new ledger rows incrementally (by `received_at`) from Neon into S3 Bronze. That job lives in the data-platform repository, not here.
-
-Before production use, validate the schema migration, permissions, idempotency, replay behavior, retries, dead-letter handling, and monitoring.
-
-## Security and privacy
-
-- Use synthetic reservation data only.
-- Never commit guest names, contact details, payment data, credentials, or real connection strings.
-- Use least-privilege roles for Kafka and Neon.
-- Redact secrets from logs and error reports.
-- Rotate any credential that may have been exposed; deleting it from the latest file does not remove it from Git history.
+Use the Neon **dev** branch for testing, and the **production** branch only for the final deployment.
 
 ## Repository guide
 
 | Path | Purpose |
 | --- | --- |
-| `src/events.py` | Event schema and synthetic lifecycle generation |
-| `src/kafka_producer.py` | Kafka event publisher |
-| `src/kafka_consumer.py` | Kafka validation consumer |
-| `src/neon_consumer.py` | Independent consumer for Neon event-ledger persistence |
-| `src/neon_sink.py` | Idempotent Neon event-ledger persistence |
-| `docker-compose.kafka.yml` | Local Kafka environment |
-| `docs/event-contract.md` | Versioned event contract and mapping constraints |
-| `migrations/001_create_reservation_event_ledger.sql` | Proposed additive event-ledger schema; requires review before applying |
-| `tests/` | Automated test suite |
-| `.env.example` | Configuration template without real credentials |
+| `src/events.py` | Event schema (Pydantic) and synthetic lifecycle generator |
+| `src/kafka_producer.py` | Kafka publisher (batch and continuous modes) |
+| `src/kafka_consumer.py` | Validation-only consumer |
+| `src/neon_consumer.py` | Kafka → Neon consumer with DLQ |
+| `src/neon_sink.py` | Idempotent insert into `streaming.reservation_event_ledger` |
+| `migrations/` | SQL migrations, applied by the owner role |
+| `catalog/` | Hotel and room catalog pinned from `HospedaPlus/db_simulated` |
+| `docs/event-contract.md` | Event contract 1.3 |
+| `Dockerfile` | App image for the producer and the consumer |
+| `docker-compose.yml` | Full local stack |
+| `docker-compose.kafka.yml` | Kafka broker only |
+| `.env.example` | Configuration template without secrets |
+| `tests/` | Automated tests |
 
-## Delivery checklist
+## Security and privacy
 
-- [x] Publish synthetic F2 event contract version 1.3 (guest reference, loyalty tier, nightly rate, local hotel time).
-- [x] Continuous mode with peaks (≥ 10 events/s) and demand calibrated to 68% occupancy, with demand surges.
-- [x] Add Kafka producer and validation consumer.
-- [x] Add local Kafka Compose configuration.
-- [x] Add an isolated Neon event-ledger sink and consumer to `main`.
-- [ ] Run full tests and Ruff checks on the current default-branch commit.
-- [ ] Run Kafka broker integration tests from a clean environment.
-- [ ] Review and apply the Neon event-ledger migration through the approved process.
-- [ ] Verify live Neon persistence with integration tests.
-- [x] Single storage path: Kafka → Neon ledger; the lakehouse reads the ledger from Neon.
-- [x] Dead-letter topic for invalid messages in the Neon consumer.
-- [ ] Apply the inventory projection (`reservar()` / `liberar()`) in the same transaction as the ledger insert.
-- [ ] Validate replay, idempotency, and offset behavior end to end.
-- [ ] Confirm deployment ownership, security, monitoring, and budget before production use.
+- Synthetic data only. `guest_ref` is a pseudonymous code, and there are no names, emails, phone numbers or payment data.
+- Credentials live only in `.env` (git-ignored) or in AWS Secrets Manager.
+- The Neon roles follow least privilege: `app_writer` has no DDL, and `etl_reader` is read-only.
+- If a credential is exposed, rotate it in Neon with `ALTER ROLE ... PASSWORD`. Deleting it from a file does not remove it from Git history.
 
-## Definition of done
+## Roadmap
 
-Production readiness requires passing automated checks, an agreed event contract, verified Neon persistence, secure credential management, demonstrated failure recovery, and documented deployment and monitoring ownership. Until then, this project remains in development.
+- [x] Event contract 1.3 (guest reference, loyalty tier, nightly rate, local hotel time)
+- [x] Continuous mode with peaks ≥ 10 events/s, calibrated demand and surges
+- [x] Kafka producer with `acks=all` and idempotence
+- [x] Kafka → Neon ledger consumer with DLQ, verified on Neon dev
+- [x] One-command Docker environment
+- [ ] Inventory projection (`reservar()` / `liberar()`) in the same transaction as the ledger insert
+- [ ] Deployment on AWS (MSK + ECS Fargate) with monitoring
 
 ---
 
