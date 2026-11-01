@@ -175,7 +175,7 @@ The validation consumer parses events with Pydantic and logs safe metadata. It d
 
 ### 6. Run the Neon ledger consumer (optional)
 
-Before running this component, the team must approve and apply `migrations/001_create_reservation_event_ledger.sql` through the database migration process. This additive migration is designed for the streaming-owned event ledger and must not be assumed to have been applied to the shared Neon project.
+Before running this component, apply `migrations/001_create_reservation_event_ledger.sql` in the Neon SQL Editor **as the owner role** (`hospedaplus_owner`). It creates `streaming.reservation_event_ledger`. The consumer connects as `app_writer` (read/write on schemas `operation` and `streaming`, no DDL); the worker bronze reads as `etl_reader` (read-only).
 
 Set `NEON_DATABASE_URL` in an untracked local `.env` file or approved secret store, then run:
 

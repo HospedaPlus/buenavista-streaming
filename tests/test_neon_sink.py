@@ -39,7 +39,7 @@ def test_persist_returns_true_for_a_new_event(database_mocks):
     assert inserted is True
     assert cursor.execute.call_count == 1
     sql, params = cursor.execute.call_args.args
-    assert "INSERT INTO public.reservation_event_ledger" in sql
+    assert "INSERT INTO streaming.reservation_event_ledger" in sql
     assert params[0] == str(event.event_id)
     assert params[-3:] == ("reservation.events.v1_3", 1, 25)
 
