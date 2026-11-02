@@ -19,6 +19,7 @@ import signal
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 from confluent_kafka import Producer
 from confluent_kafka.error import KafkaException
@@ -139,6 +140,7 @@ def publish_events(
     surges: Sequence[DemandSurge] = (),
     rate_profile: RateProfile | None = None,
     duration_s: float | None = None,
+    stream_start: datetime | None = None,
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
 ) -> int:
@@ -179,7 +181,11 @@ def publish_events(
     next_send = start
     last_log = start
     events = generate_events(
-        seed=seed, out_of_order_rate=out_of_order_rate, occupancy=occupancy, surges=surges
+        seed=seed,
+        out_of_order_rate=out_of_order_rate,
+        occupancy=occupancy,
+        surges=surges,
+        **({"start": stream_start} if stream_start is not None else {}),
     )
     try:
         for event in events:
@@ -292,6 +298,9 @@ def main(argv: list[str] | None = None) -> None:
         surges=surges,
         rate_profile=rate_profile,
         duration_s=args.duration,
+        # Continuous mode books from the current time: F3 only sells nights from
+        # its load date onwards, so stays in the past would all be skipped.
+        stream_start=datetime.now(UTC) if args.continuous else None,
     )
 
 
