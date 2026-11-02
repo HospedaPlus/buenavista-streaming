@@ -44,7 +44,7 @@ docker compose -f docker-compose.kafka.yml ps
 Create the initial topic:
 
 ```powershell
-docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic reservation.events.v1_3 --partitions 3 --replication-factor 1
+docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic reservation.events.v1_3 --partitions 6 --replication-factor 1
 ```
 
 Inspect topics:

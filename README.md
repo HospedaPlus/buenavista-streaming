@@ -257,6 +257,7 @@ All settings come from environment variables. The `docker-compose.yml` file alre
 | Variable | Default | Used by |
 | --- | --- | --- |
 | `NEON_DATABASE_URL` | none (required) | `neon-consumer`, connecting as `app_writer` |
+| `NEON_CONSUMERS` | `6` | number of `neon-consumer` replicas (one per partition) |
 | `NEON_APPLY_OPERATION` | `true` | `neon-consumer`: also apply each event to F3 (`operation`); `false` = ledger only |
 | `NEON_OWNER_URL` | none (required in Docker) | `neon-migrate`, connecting as `hospedaplus_owner` |
 | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` (`kafka:29092` inside Docker) | producer and consumers |
@@ -357,7 +358,7 @@ python -m src.neon_consumer                                # Kafka → Neon (nee
 To create the topics when you run without the full compose:
 
 ```bash
-docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic reservation.events.v1_3 --partitions 3 --replication-factor 1
+docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic reservation.events.v1_3 --partitions 6 --replication-factor 1
 docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic reservation.events.dlq --partitions 1 --replication-factor 1
 ```
 
