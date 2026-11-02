@@ -77,7 +77,9 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_RESERVATION_TOPIC: reservation.events.v1_3
-    command: ["python", "-m", "src.kafka_producer", "--continuous"]
+    # Pace of the stream. Neon free tier: keep it low (0.05 ev/s ~ 4,300 events/day).
+    command: ["python", "-m", "src.kafka_producer", "--continuous",
+              "--base-rate", "${F2_BASE_RATE:-0.05}", "--peak-rate", "${F2_PEAK_RATE:-0.15}"]
     restart: unless-stopped
 
   neon-consumer:
@@ -101,7 +103,7 @@ services:
     # (~2 events/s per consumer), so 6 consumers keep up with the 10-15 ev/s
     # peaks. Events of one reservation share a key, so they stay in order.
     deploy:
-      replicas: ${NEON_CONSUMERS:-6}
+      replicas: ${NEON_CONSUMERS:-2}
 
 volumes:
   kafka_data:
