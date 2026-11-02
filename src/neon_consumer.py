@@ -1,4 +1,4 @@
-"""Consume Kafka events and persist them to the Neon event ledger.
+"""Consume Kafka events, persist them to the Neon ledger and apply them to F3's inventory.
 
 Processing order is intentional:
 1. Receive and validate a message.
@@ -135,10 +135,11 @@ def consume_events() -> None:
             consumer.commit(message=message, asynchronous=False)
 
             logger.info(
-                "Neon ledger write confirmed event_id=%s inserted=%s topic=%s "
+                "Neon ledger write confirmed event_id=%s inserted=%s operation=%s topic=%s "
                 "partition=%s offset=%s",
                 event.event_id,
                 inserted,
+                sink.last_outcome,
                 message.topic(),
                 message.partition(),
                 message.offset(),

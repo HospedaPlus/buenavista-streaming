@@ -1,7 +1,9 @@
-"""Persist validated Kafka reservation events to the additive Neon event ledger.
+"""Persist validated Kafka reservation events to Neon.
 
-This module stores immutable event history and Kafka provenance. It does not
-modify the existing F3 operational reservations table.
+Each event is stored in the append-only ledger (schema `streaming`) and, in
+the same transaction, applied to F3's inventory (schema `operation`) through
+operation.reservar() / modificar() / cancelar() / liberar(). See
+src/operation_sink.py. Set NEON_APPLY_OPERATION=false to keep the ledger only.
 """
 
 import os
@@ -12,6 +14,7 @@ from dotenv import load_dotenv
 from psycopg.types.json import Jsonb
 
 from src.events import ReservationEvent
+from src.operation_sink import apply_event
 
 # Load local development settings without overriding variables supplied by the
 # process or deployment platform.
@@ -21,11 +24,23 @@ load_dotenv()
 class NeonEventSink:
     """Persist reservation events idempotently in PostgreSQL on Neon."""
 
-    def __init__(self, database_url: str | None = None) -> None:
+    def __init__(
+        self, database_url: str | None = None, apply_operation: bool | None = None
+    ) -> None:
         """Use an explicit connection URL or the NEON_DATABASE_URL environment variable."""
         self.database_url = database_url or os.getenv("NEON_DATABASE_URL")
         if not self.database_url:
             raise ValueError("NEON_DATABASE_URL must be configured in the environment or .env file")
+        if apply_operation is None:
+            apply_operation = os.getenv("NEON_APPLY_OPERATION", "true").lower() not in (
+                "0",
+                "false",
+                "no",
+            )
+        self.apply_operation = apply_operation
+        # What the last persisted event did to F3's inventory (for logs):
+        # confirmed, rejected, modified, cancelled, pending, skipped: ..., or None.
+        self.last_outcome: str | None = None
         # One connection is reused for every event instead of opening a new one
         # per message (at 10-15 events/s that saves a TLS handshake each time).
         self._connection: psycopg.Connection | None = None
@@ -64,7 +79,10 @@ class NeonEventSink:
 
         connection = self._connect()
         try:
-            return self._persist(connection, event, payload, topic, partition, offset)
+            inserted, self.last_outcome = self._persist(
+                connection, event, payload, topic, partition, offset, self.apply_operation
+            )
+            return inserted
         except psycopg.OperationalError:
             # Broken connection: drop it so the next call reconnects. The error is
             # re-raised so the caller does not commit the Kafka offset.
@@ -72,9 +90,11 @@ class NeonEventSink:
             raise
 
     @staticmethod
-    def _persist(connection, event, payload, topic, partition, offset) -> bool:
+    def _persist(
+        connection, event, payload, topic, partition, offset, apply_operation=False
+    ) -> tuple[bool, str | None]:
         # The transaction block commits on success and rolls back if an exception
-        # escapes it. No F3 operational table is touched.
+        # escapes it: ledger row and inventory change are written together.
         with connection.transaction():
             with connection.cursor() as cursor:
                 cursor.execute(
@@ -121,4 +141,6 @@ class NeonEventSink:
                             f"Event ID conflict with different payload: {event.event_id}"
                         )
 
-                return inserted
+            # A redelivered event was applied the first time: never apply it twice.
+            outcome = apply_event(connection, event) if inserted and apply_operation else None
+            return inserted, outcome

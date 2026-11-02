@@ -257,6 +257,7 @@ All settings come from environment variables. The `docker-compose.yml` file alre
 | Variable | Default | Used by |
 | --- | --- | --- |
 | `NEON_DATABASE_URL` | none (required) | `neon-consumer`, connecting as `app_writer` |
+| `NEON_APPLY_OPERATION` | `true` | `neon-consumer`: also apply each event to F3 (`operation`); `false` = ledger only |
 | `NEON_OWNER_URL` | none (required in Docker) | `neon-migrate`, connecting as `hospedaplus_owner` |
 | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` (`kafka:29092` inside Docker) | producer and consumers |
 | `KAFKA_RESERVATION_TOPIC` | `reservation.events.v1_3` | producer and consumers |

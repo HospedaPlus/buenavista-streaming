@@ -16,6 +16,8 @@ def database_mocks(monkeypatch):
     connection.__enter__.return_value = connection
     connection.cursor.return_value.__enter__.return_value = cursor
     monkeypatch.setattr("src.neon_sink.psycopg.connect", MagicMock(return_value=connection))
+    # These tests cover the ledger only; tests/test_operation_sink.py covers F3.
+    monkeypatch.setenv("NEON_APPLY_OPERATION", "false")
     return connection, cursor
 
 
