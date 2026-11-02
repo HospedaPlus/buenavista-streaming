@@ -45,7 +45,8 @@ services:
       - |
         set -e
         K=/opt/kafka/bin/kafka-topics.sh
-        $$K --bootstrap-server kafka:29092 --create --if-not-exists --topic reservation.events.v1_3 --partitions 3 --replication-factor 1
+        $$K --bootstrap-server kafka:29092 --create --if-not-exists --topic reservation.events.v1_3 --partitions 6 --replication-factor 1
+        $$K --bootstrap-server kafka:29092 --alter --topic reservation.events.v1_3 --partitions 6 2>/dev/null || true
         $$K --bootstrap-server kafka:29092 --create --if-not-exists --topic reservation.events.dlq --partitions 1 --replication-factor 1
         echo "Topics listos"
     restart: "no"
@@ -96,6 +97,11 @@ services:
       NEON_APPLY_OPERATION: ${NEON_APPLY_OPERATION:-true}
     command: ["python", "-m", "src.neon_consumer"]
     restart: unless-stopped
+    # One consumer per partition. Each event takes several round trips to Neon
+    # (~2 events/s per consumer), so 6 consumers keep up with the 10-15 ev/s
+    # peaks. Events of one reservation share a key, so they stay in order.
+    deploy:
+      replicas: ${NEON_CONSUMERS:-6}
 
 volumes:
   kafka_data:
