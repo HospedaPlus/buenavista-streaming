@@ -91,3 +91,25 @@ Si requieres que el pipeline permanezca activo 24/7 de forma definitiva, existen
 | **Seguridad** | Archivo `.env` local en la máquina virtual. | URLs y credenciales de Neon resguardadas en **AWS Secrets Manager**. |
 
 > **💡 Soporte:** Te sugerimos iniciar con la **Opción 1** para validar el comportamiento en la nube y migrar a la **Opción 2** una vez que tengan aprovisionado el clúster de MSK. Si observas algún error en los logs (marcado en rojo), cópialo y compártelo conmigo **eliminando previamente cualquier URL o contraseña**.
+
+
+FINAL TO DO from bash
+```bash
+git pull
+docker compose down -v
+docker compose up --build
+```
+
+Ahora sí funciona! F2 pasó de 5 a 692 confirmadas, 72 canceladas y 5 no-show, y sigue subiendo. Las reservas de F2 y F3 ya están en el mismo inventario.
+
+La consulta que debe dar 0 es esta (que ninguna noche se venda por encima del cupo):
+```sql
+SELECT count(*) FROM operation.inventory
+WHERE sold_rooms > total_rooms + overbooking_limit;
+```
+Cuando termines, apaga todo con Ctrl+C y luego docker compose down en cada carpeta, para no gastar horas de Neon.
+-----
+el .env esta en el ec2 y 
+como corri con esto:
+docker compose up -d --build
+docker compose logs -f --tail 20 neon-consumer
