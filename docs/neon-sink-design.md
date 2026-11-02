@@ -8,6 +8,27 @@ The target model is both:
 
 The additive DDL is in `migrations/001_create_reservation_event_ledger.sql`. It has not been applied to Neon.
 
+## Implemented: applying events to F3 (`operation`)
+
+`src/operation_sink.py` applies each newly inserted ledger event to F3 in the
+same transaction, through the F3 functions (repo `db_simulated`):
+
+| Event | F3 call | Outcomes |
+|---|---|---|
+| `reservation.created` | `operation.reservar()` | confirmed, rejected, already_exists |
+| `reservation.updated` | `operation.modificar()` | modified, rejected, stale, not_modifiable, pending |
+| `reservation.cancelled` | `operation.cancelar()` | cancelled, not_modifiable, pending |
+| `reservation.no_show` | `operation.liberar(code, 'no_show')` | no_show, not_modifiable, pending |
+| `checked_in` / `checked_out` | none | ignored |
+
+- F3 code is `F2-<reservation_id>`; the guest comes from `guest_ref`, the first night from `nightly_rate`.
+- A redelivered event is not inserted in the ledger again, so it is never applied twice.
+- Out of order (CA-09): an event for a booking F3 doesn't have yet is `pending`; when the creation arrives, later ledger events for that reservation are replayed in version order.
+- Data F3 rejects (unknown guest, check-in before booking date, missing rate) is `skipped` inside a savepoint: the ledger row still commits and the consumer keeps going.
+- `NEON_APPLY_OPERATION=false` turns it off (ledger only). Requires F3 `seed init` on the same database first, so `operation.modificar()` exists.
+
+The gates below are the original analysis; contract 1.3 and the F3 functions resolved them.
+
 ## Source-of-truth catalog
 
 The F2 generator uses the pinned canonical catalog at `catalog/catalog.json`, currently version `1.1.0`. See `catalog/README.md`. Event schema version is `1.3`.

@@ -3,7 +3,7 @@
 #   kafka-init     -> crea los topics una vez y termina
 #   neon-migrate   -> aplica migrations/*.sql en Neon con el usuario dueño y termina
 #   producer       -> stream continuo de eventos F2 (5 ev/s, picos de 15 ev/s)
-#   neon-consumer  -> lee Kafka y guarda en streaming.reservation_event_ledger como app_writer
+#   neon-consumer  -> lee Kafka y guarda en streaming.reservation_event_ledger y aplica a operation como app_writer
 # Requiere en .env: NEON_DATABASE_URL (app_writer) y NEON_OWNER_URL (hospedaplus_owner).
 services:
   kafka:
@@ -93,6 +93,7 @@ services:
       KAFKA_DLQ_TOPIC: reservation.events.dlq
       KAFKA_NEON_GROUP_ID: buenavista-neon-ledger
       NEON_DATABASE_URL: ${NEON_DATABASE_URL:?Falta NEON_DATABASE_URL en .env (usuario app_writer)}
+      NEON_APPLY_OPERATION: ${NEON_APPLY_OPERATION:-true}
     command: ["python", "-m", "src.neon_consumer"]
     restart: unless-stopped
 
