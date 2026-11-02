@@ -234,7 +234,12 @@ def main(argv: list[str] | None = None) -> None:
     """Parse CLI arguments and run a batch or continuous producer."""
     parser = argparse.ArgumentParser(description="Publish synthetic F2 events to Kafka.")
     parser.add_argument("--count", type=int, default=None, help="events to send (batch: 20)")
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="random seed (batch: 42; continuous: new each run so events never repeat)",
+    )
     parser.add_argument("--topic", default=None)
     parser.add_argument("--bootstrap-servers", default=None)
     parser.add_argument("--out-of-order-rate", type=float, default=DEFAULT_OUT_OF_ORDER_RATE)
@@ -259,6 +264,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--duration", type=float, default=None, help="stop after N seconds")
     args = parser.parse_args(argv)
 
+    seed = args.seed
+    if seed is None:
+        # A fixed seed in continuous mode replays the same event_ids on every
+        # start, and the Neon ledger ignores them as duplicates.
+        seed = time.time_ns() % 2**31 if args.continuous else 42
+    logger.info("Producer seed=%s", seed)
     surges = [DemandSurge.parse(text) for text in args.surge]
     rate_profile = None
     count = args.count
@@ -273,7 +284,7 @@ def main(argv: list[str] | None = None) -> None:
 
     publish_events(
         count=count,
-        seed=args.seed,
+        seed=seed,
         topic=args.topic,
         bootstrap_servers=args.bootstrap_servers,
         out_of_order_rate=args.out_of_order_rate,

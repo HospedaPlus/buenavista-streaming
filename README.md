@@ -274,7 +274,7 @@ To change the stream, edit the `producer` service's `command` in `docker-compose
 | --- | --- | --- |
 | `--continuous` | off | Endless, paced stream |
 | `--count N` | 20 | Batch mode: send N events as fast as possible |
-| `--seed` | 42 | Random seed (reproducible output) |
+| `--seed` | 42 in batch, new each run with `--continuous` | Random seed (same seed → same events) |
 | `--base-rate` / `--peak-rate` | 5 / 15 | Events per second outside and during peaks |
 | `--peak-every` / `--peak-duration` | 60 / 10 | Seconds between peaks, and peak length |
 | `--duration` | none | Stop after N seconds |
