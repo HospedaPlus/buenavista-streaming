@@ -77,9 +77,12 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_RESERVATION_TOPIC: reservation.events.v1_3
-    # Pace of the stream. Neon free tier: keep it low (0.05 ev/s ~ 4,300 events/day).
+    # Pace of the stream. Low base rate for the Neon free tier, plus a short
+    # 15 ev/s peak (requirement: >= 10 ev/s at peak) once an hour:
+    # ~4,300 base + ~3,600 peak = ~8,000 events/day.
     command: ["python", "-m", "src.kafka_producer", "--continuous",
-              "--base-rate", "${F2_BASE_RATE:-0.05}", "--peak-rate", "${F2_PEAK_RATE:-0.15}"]
+              "--base-rate", "${F2_BASE_RATE:-0.05}", "--peak-rate", "${F2_PEAK_RATE:-15}",
+              "--peak-every", "${F2_PEAK_EVERY_S:-3600}", "--peak-duration", "${F2_PEAK_DURATION_S:-10}"]
     restart: unless-stopped
 
   neon-consumer:
