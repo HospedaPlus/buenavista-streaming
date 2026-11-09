@@ -31,17 +31,17 @@
 
 ## What this project does
 
-Buenavista Streaming simulates **F2, the channel-manager source** of the HospedaPlus data platform. It generates realistic reservation lifecycle events for 28 hotels (4,000 rooms in five countries). It publishes them to Apache Kafka, and a consumer stores every event in **Neon PostgreSQL**.
+Buenavista Streaming simulates **F2, the channel-manager source** of the HospedaPlus data platform. It generates realistic reservation lifecycle events for 28 hotels (4,000 rooms in five countries). It publishes them to Apache Kafka, and a consumer stores every event in **Neon PostgreSQL** and applies it to the F3 operational inventory (schema `operation`), so OTA bookings take rooms from the same inventory as every other channel.
 
 | Dimension | Definition |
 | --- | --- |
 | Business domain | Hotel reservations from OTAs and other channels |
 | Event types | created, updated, cancelled, no-show, checked-in, checked-out |
-| Throughput | Continuous: 5 events/s, with a 15 events/s peak for 10 s every minute |
+| Throughput | Continuous and configurable. Docker default: 0.05 events/s base with a 15 events/s peak for 10 s once an hour (~8,000 events/day, sized for the Neon free tier) |
 | Demand model | Calibrated to 68% occupancy and a 50% OTA share; optional demand surges |
 | Realism | Multiple modifications, late cancellations, no-shows, ~5% out-of-order events |
 | Event format | Versioned JSON (contract **1.3**) validated with Pydantic |
-| Storage | `streaming.reservation_event_ledger` in Neon (idempotent, one row per event) |
+| Storage | `streaming.reservation_event_ledger` in Neon (idempotent, one row per event) + `operation` inventory, in the same transaction |
 | Reproducibility | Same `--seed` → same events |
 | Privacy | Synthetic data only; pseudonymous guest reference, no names, contact details or payment data |
 
@@ -51,10 +51,12 @@ Buenavista Streaming simulates **F2, the channel-manager source** of the Hospeda
 | --- | --- |
 | Event generator and contract 1.3 | ✅ Done, covered by tests |
 | Kafka producer (batch and continuous, `acks=all`, idempotent) | ✅ Done |
-| Kafka → Neon consumer, with DLQ for invalid messages | ✅ Done, verified against Neon (dev branch) |
+| Kafka → Neon consumer, with DLQ for invalid messages | ✅ Done |
+| Inventory projection in F3 (`reservar()` / `modificar()` / `cancelar()` / `liberar()`), same transaction as the ledger | ✅ Done, overbooking = 0 |
 | One-command Docker environment | ✅ Done |
-| Inventory projection (`reservar()` / `liberar()`) in Neon | ⏳ Pending: needs the F3 inventory tables |
-| Cloud deployment (MSK + ECS Fargate) | ⏳ Pending |
+| CI (lint + tests) and CD (image in GHCR + deploy to the sources EC2) | ✅ Done; deploy is off until its secrets exist |
+| Running 24/7 on AWS EC2 (Docker Compose) against Neon **production** | ✅ Running since 2026-11-02 |
+| Target architecture (MSK + ECS Fargate) | ⏳ Not started |
 
 ## Architecture
 
@@ -63,12 +65,15 @@ flowchart LR
     P["producer<br/>synthetic F2 events"] --> K["Apache Kafka<br/>reservation.events.v1_3"]
     K --> C["neon-consumer"]
     C --> N["Neon PostgreSQL<br/>streaming.reservation_event_ledger"]
+    C --> O["Neon PostgreSQL<br/>operation (F3 inventory)<br/>reservar / modificar / cancelar / liberar"]
     C -. "invalid messages" .-> D["Kafka DLQ<br/>reservation.events.dlq"]
     N -. "incremental extraction<br/>(Airflow worker bronze, other repo)" .-> S["Amazon S3 Bronze"]
 ```
 
 - **One storage path.** Kafka writes only to Neon. The lakehouse gets F2 when the Airflow worker bronze extracts new ledger rows from Neon into S3, the same way it extracts the other Neon tables.
-- **Ordering.** The Kafka key is `reservation_id`, so all events of one reservation stay in one partition, in order.
+- **One inventory.** In the same transaction as the ledger insert, the consumer applies the event to F3 (`src/operation_sink.py`): `created` → `operation.reservar()`, `updated` → `modificar()`, `cancelled` → `cancelar()`, `no_show` → `liberar(..., 'no_show')`. The F3 booking code is `F2-<reservation_id>`. Set `NEON_APPLY_OPERATION=false` to write the ledger only. The F3 functions must exist first (`python -m seed init` in `HospedaPlus/db_simulated`).
+- **Out-of-order events.** An update, cancellation or no-show for a booking F3 does not know yet stays in the ledger as pending. When its creation arrives, the later events of that reservation are replayed in version order.
+- **Ordering.** The Kafka key is `reservation_id`, so all events of one reservation stay in one partition (6 partitions), in order.
 - **No data loss.** The consumer commits the Kafka offset only after Neon confirms the insert. Replays are safe because the `event_id` is the primary key.
 - **Least privilege in Neon.** The consumer writes as `app_writer`, which cannot change the schema. Only the owner role (`hospedaplus_owner`) applies migrations. Analytics reads as `etl_reader`, which is read-only.
 
@@ -82,13 +87,13 @@ One command starts the whole flow:
 | `kafka-init` | Creates the topic and the DLQ topic | `Exited (0)` (runs once) |
 | `neon-migrate` | Applies `migrations/*.sql` to Neon as the owner | `Exited (0)` (runs once) |
 | `producer` | Publishes the continuous event stream | `Up` |
-| `neon-consumer` | Reads Kafka and writes to Neon | `Up` |
+| `neon-consumer` | Reads Kafka, writes the ledger and applies to `operation` (`NEON_CONSUMERS` replicas, default 2) | `Up` (one per replica) |
 
 ### Prerequisites
 
 - **Docker Desktop**, with "Engine running". On Windows it needs WSL 2.
 - **Git.**
-- **A Neon project** with the `streaming` schema and the `app_writer` role already created by the team's roles script. Use the **dev** branch for testing.
+- **A Neon project** (database `hospedaplus`) with the `streaming` and `operation` schemas and the `app_writer` role already created by the team's roles script, and the F3 functions installed (`python -m seed init` in `db_simulated`). Use the **development** branch for testing.
 
 ### Step 1 · Clone the repository
 
@@ -104,12 +109,14 @@ copy .env.example .env      # Windows PowerShell
 # cp .env.example .env      # macOS / Linux
 ```
 
-Open `.env` and fill in the two Neon URLs. To find them, open the Neon console, click **Connect**, choose the branch (`dev`), and choose the role:
+Open `.env` and fill in the two Neon URLs. To find them, open the Neon console, click **Connect**, choose the branch (`development`), the database `hospedaplus`, and the role:
 
 ```dotenv
-NEON_DATABASE_URL=postgresql://app_writer:<password>@<host>/neondb?sslmode=require
-NEON_OWNER_URL=postgresql://hospedaplus_owner:<password>@<host>/neondb?sslmode=require
+NEON_DATABASE_URL=postgresql://app_writer:<password>@<host>/hospedaplus?sslmode=require
+NEON_OWNER_URL=postgresql://hospedaplus_owner:<password>@<host>/hospedaplus?sslmode=require
 ```
+
+The same file holds the stream pace (`F2_BASE_RATE`, `F2_PEAK_RATE`, `F2_PEAK_EVERY_S`, `F2_PEAK_DURATION_S`) and `NEON_CONSUMERS`; see [Configuration](#configuration).
 
 > `.env` is in `.gitignore`. Never commit it, and never paste these URLs in chats or issues.
 
@@ -159,7 +166,7 @@ docker compose logs --tail 50 neon-consumer
 
 ### 3. Look at the data in Neon
 
-Open the Neon console, go to the **SQL Editor**, and select the **dev** branch.
+Open the Neon console, go to the **SQL Editor**, and select the **development** branch.
 
 Events per type (run it again a minute later and the counts grow):
 
@@ -198,6 +205,16 @@ GROUP BY 1
 ORDER BY 1;
 ```
 
+Bookings applied to the F3 inventory, and the overbooking check (must return 0):
+
+```sql
+SELECT status, count(*) FROM operation.reservations
+WHERE code LIKE 'F2-%' GROUP BY status;
+
+SELECT count(*) FROM operation.inventory
+WHERE sold_rooms > total_rooms + overbooking_limit;
+```
+
 You can also browse the data under **Tables**, by choosing the `streaming` schema and then `reservation_event_ledger`.
 
 > In continuous mode the simulated clock runs about 4–5 minutes ahead per real second. Check-ins happen days after a booking, so check-in and check-out events appear after the stack has been running for a while.
@@ -233,7 +250,7 @@ docker exec buenavista-streaming-kafka /opt/kafka/bin/kafka-console-consumer.sh 
 | Remove containers, keep Kafka data | `docker compose down` |
 | Remove everything, including local Kafka data | `docker compose down -v` |
 
-`down -v` deletes only the local Kafka messages. The rows already stored in Neon stay there. To empty the ledger in dev, run `TRUNCATE streaming.reservation_event_ledger;` as `hospedaplus_owner`.
+`down -v` deletes only the local Kafka messages. The rows already stored in Neon stay there. To empty the ledger in development, run `TRUNCATE streaming.reservation_event_ledger;` as `hospedaplus_owner`.
 
 ## Troubleshooting
 
@@ -252,12 +269,12 @@ When you ask for help, share the log lines, but remove URLs and passwords first.
 
 ## Configuration
 
-All settings come from environment variables. The `docker-compose.yml` file already sets the Kafka values for containers. `.env` only needs the Neon URLs.
+All settings come from environment variables. The `docker-compose.yml` file already sets the Kafka values for containers. `.env` needs the Neon URLs; the other values are optional.
 
 | Variable | Default | Used by |
 | --- | --- | --- |
 | `NEON_DATABASE_URL` | none (required) | `neon-consumer`, connecting as `app_writer` |
-| `NEON_CONSUMERS` | `6` | number of `neon-consumer` replicas (one per partition) |
+| `NEON_CONSUMERS` | `2` | number of `neon-consumer` replicas (up to 6, one per partition) |
 | `NEON_APPLY_OPERATION` | `true` | `neon-consumer`: also apply each event to F3 (`operation`); `false` = ledger only |
 | `NEON_OWNER_URL` | none (required in Docker) | `neon-migrate`, connecting as `hospedaplus_owner` |
 | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` (`kafka:29092` inside Docker) | producer and consumers |
@@ -266,10 +283,14 @@ All settings come from environment variables. The `docker-compose.yml` file alre
 | `KAFKA_NEON_GROUP_ID` | `buenavista-neon-ledger` | `neon-consumer` |
 | `KAFKA_GROUP_ID` | `buenavista-validation-consumer` | validation consumer |
 | `LOG_LEVEL` | `INFO` | `neon-consumer` |
+| `F2_BASE_RATE` | `0.05` | `producer` in Docker: events/s outside peaks |
+| `F2_PEAK_RATE` | `15` | `producer` in Docker: events/s during peaks |
+| `F2_PEAK_EVERY_S` | `3600` | `producer` in Docker: seconds between peaks |
+| `F2_PEAK_DURATION_S` | `10` | `producer` in Docker: peak length in seconds |
 
 ### Producer options
 
-To change the stream, edit the `producer` service's `command` in `docker-compose.yml`, or run the producer locally (see below).
+In Docker, the pace comes from the `F2_*` variables above. For other options, edit the `producer` service's `command` in `docker-compose.yml`, or run the producer locally (see below). The defaults below are those of the CLI.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
@@ -368,10 +389,15 @@ The `Dockerfile` builds one image that runs both the producer and the consumer, 
 
 | Option | When to use it | How |
 | --- | --- | --- |
-| **A · Demo on EC2** | Fastest way to keep it running 24/7 | Launch a small EC2 instance (for example `t3.small`) and install Docker. Clone the repo, create `.env`, and run `docker compose up -d --build`. |
+| **A · EC2 with Docker Compose (current)** | Running 24/7 today, with F3 and F4 on the same EC2 (Ubuntu, us-east-2) against Neon production | Install Docker, clone the repo into `~/buenavista-streaming`, create `.env`, and run `docker compose up -d --build`. |
 | **B · Target architecture** | Final deployment (diagram v3) | Push the image to ECR. Create Amazon MSK and set `KAFKA_BOOTSTRAP_SERVERS` to its brokers. Run two ECS Fargate services, `producer` and `neon-consumer`, with the Neon URLs injected from AWS Secrets Manager. Apply migrations once as the owner, through a one-off task or the Neon SQL Editor. |
 
-Use the Neon **dev** branch for testing, and the **production** branch only for the final deployment.
+Use the Neon **development** branch for testing, and the **production** branch only for the deployment.
+
+### CI/CD
+
+- `.github/workflows/ci.yml`: lint and tests on every PR and push.
+- `.github/workflows/cd.yml`: builds the image on every PR; on merge to `main` (or a `vX.Y.Z` tag) it publishes `ghcr.io/hospedaplus/buenavista-streaming` and deploys over SSH to the sources EC2 (`git pull --ff-only && docker compose up -d --build`). The deploy stays off until the secrets `DEPLOY_SSH_KEY` and `SOURCES_HOST` exist (`DEPLOY_SSH_USER` is optional, default `ubuntu`).
 
 ## Repository guide
 
@@ -382,6 +408,7 @@ Use the Neon **dev** branch for testing, and the **production** branch only for 
 | `src/kafka_consumer.py` | Validation-only consumer |
 | `src/neon_consumer.py` | Kafka → Neon consumer with DLQ |
 | `src/neon_sink.py` | Idempotent insert into `streaming.reservation_event_ledger` |
+| `src/operation_sink.py` | Applies each event to F3 (`operation.reservar()` / `modificar()` / `cancelar()` / `liberar()`) and replays pending out-of-order events |
 | `migrations/` | SQL migrations, applied by the owner role |
 | `catalog/` | Hotel and room catalog pinned from `HospedaPlus/db_simulated` |
 | `docs/event-contract.md` | Event contract 1.3 |
@@ -389,6 +416,7 @@ Use the Neon **dev** branch for testing, and the **production** branch only for 
 | `docker-compose.yml` | Full local stack |
 | `docker-compose.kafka.yml` | Kafka broker only |
 | `.env.example` | Configuration template without secrets |
+| `.github/workflows/` | CI (`ci.yml`) and CD (`cd.yml`) |
 | `tests/` | Automated tests |
 
 ## Security and privacy
@@ -403,10 +431,12 @@ Use the Neon **dev** branch for testing, and the **production** branch only for 
 - [x] Event contract 1.3 (guest reference, loyalty tier, nightly rate, local hotel time)
 - [x] Continuous mode with peaks ≥ 10 events/s, calibrated demand and surges
 - [x] Kafka producer with `acks=all` and idempotence
-- [x] Kafka → Neon ledger consumer with DLQ, verified on Neon dev
+- [x] Kafka → Neon ledger consumer with DLQ
 - [x] One-command Docker environment
-- [ ] Inventory projection (`reservar()` / `liberar()`) in the same transaction as the ledger insert
-- [ ] Deployment on AWS (MSK + ECS Fargate) with monitoring
+- [x] Inventory projection in F3 (`reservar()` / `modificar()` / `cancelar()` / `liberar()`) in the same transaction as the ledger insert
+- [x] CI/CD with a versioned image in GHCR
+- [x] Running on AWS EC2 against Neon production
+- [ ] Target deployment on AWS (MSK + ECS Fargate) with monitoring
 
 ---
 
